@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data & Backups
+data/*
+!data/.gitkeep
+backup_data/
+
+# Logs & Temp
+*.log
+*.tmp
+.DS_Store
+
+# Credentials
+config.py
+.env
+.env.local
+secrets.json
+
+# Binaries & Driver / Firmware installers
+*.bin
+*.zip
+*.exe
+*.mpy
+cp210x_driver/
+davis_update_console_firmware/
+

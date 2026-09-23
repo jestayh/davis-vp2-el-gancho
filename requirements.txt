@@ -1,0 +1,7 @@
+# WeatherStation uses Python 3 standard library exclusively
+# (socket, struct, math, time, datetime, urllib, json, csv, os, sys).
+# No external runtime dependencies required for production.
+
+# Optional development & testing dependencies
+pytest>=8.0.0
+python-dotenv>=1.0.0
