@@ -1,0 +1,13 @@
+{
+  "version": "1.0.0",
+  "date": "2026-09-23",
+  "description": "Lanzamiento oficial Davis VP2 El Gancho con 41 columnas y OTA",
+  "files": [
+    {"remote": "app.mpy", "local": "app.mpy"},
+    {"remote": "src/display.mpy", "local": "src/display.mpy"},
+    {"remote": "src/davis_reader.mpy", "local": "src/davis_reader.mpy"},
+    {"remote": "src/google_sheets.mpy", "local": "src/google_sheets.mpy"},
+    {"remote": "src/history_recovery.mpy", "local": "src/history_recovery.mpy"},
+    {"remote": "src/ota_updater.mpy", "local": "src/ota_updater.mpy"}
+  ]
+}

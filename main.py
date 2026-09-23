@@ -167,6 +167,22 @@ def main(max_cycles=None):
     connect_wifi_if_needed(show_display=True)
     display.set_station_id(WU_STATION_ID)
 
+    # Check for Over-The-Air (OTA) firmware updates from GitHub
+    if IS_ESP32:
+        try:
+            import src.ota_updater as ota
+            ota.check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=display)
+        except Exception as ota_err:
+            log("[OTA] Error comprobando actualizaciones: {}".format(ota_err))
+        finally:
+            try:
+                if "src.ota_updater" in sys.modules:
+                    del sys.modules["src.ota_updater"]
+            except Exception:
+                pass
+            import gc
+            gc.collect()
+
     # Check and backfill historical data if any gap occurred
     if ENABLE_DMPAFT_RECOVERY:
         try:

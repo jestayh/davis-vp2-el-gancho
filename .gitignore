@@ -39,6 +39,8 @@ secrets.json
 *.zip
 *.exe
 *.mpy
+!app.mpy
+!src/*.mpy
 cp210x_driver/
 davis_update_console_firmware/
 
