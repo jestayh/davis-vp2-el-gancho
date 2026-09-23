@@ -282,6 +282,8 @@ def main(max_cycles=None):
                     uploaded_wu = upload(WU_STATION_ID, WU_API_KEY, data, timeout=SOCKET_TIMEOUT_SECONDS)
                     last_wu_upload_time = current_time
                     display.update_cloud_status(wu_ok=uploaded_wu, timestamp_str=data.get("timestamp"))
+                    if uploaded_wu:
+                        display.wu_flicker()
 
                 # 3. Synchronized CSV & Google Drive log (every CSV_LOG_INTERVAL_SECONDS)
                 if drive_due:
@@ -384,6 +386,9 @@ def main(max_cycles=None):
                     gc.collect()
                 except Exception:
                     pass
+
+            # Update status LED timer (ensures 20s solid light turns off accurately)
+            display.check_led_timer()
 
             # Maintain smooth card rotation interval
             elapsed = time.time() - cycle_start

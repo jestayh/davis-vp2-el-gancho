@@ -79,6 +79,7 @@ class WeatherDisplay:
         self.has_oled = False
         self.led = None
         self.led_mode = led_mode
+        self.led_until = 0
         self.card_index = 0
         self.last_card_lines = None
         self.last_card_title = None
@@ -139,20 +140,48 @@ class WeatherDisplay:
         except Exception:
             pass
 
-    def sheets_success_pulse(self):
-        """Vibrant LED heartbeat pulse when data is successfully saved to Google Sheets"""
+    def led_on_for(self, seconds=20):
+        """Keep LED solid ON for specified duration in seconds (non-blocking)"""
         if not self.led:
             return
         try:
-            for _ in range(2):
-                self.led.value(1)
-                _sleep_ms(70)
+            self.led.value(1)
+            self.led_until = time.time() + seconds
+        except Exception:
+            pass
+
+    def check_led_timer(self):
+        """Check if timed solid LED should be turned off (non-blocking)"""
+        if not self.led or self.led_until == 0:
+            return
+        try:
+            now = time.time()
+            if now >= self.led_until or (self.led_until - now > 60):
                 self.led.value(0)
-                _sleep_ms(90)
+                self.led_until = 0
+            else:
                 self.led.value(1)
-                _sleep_ms(70)
+        except Exception:
+            pass
+
+    def sheets_success_pulse(self):
+        """Keep status LED solid ON for 20 seconds upon Google Sheets upload"""
+        self.led_on_for(20)
+
+    def wu_flicker(self):
+        """Quick flickering blink sequence on LED to signal a Weather Underground upload"""
+        if not self.led:
+            return
+        # If the 20s Sheets LED is currently on, do not interrupt it
+        if self.led_until > 0 and time.time() < self.led_until:
+            return
+        try:
+            for _ in range(3):
+                self.led.value(1)
+                _sleep_ms(35)
                 self.led.value(0)
-                _sleep_ms(150)
+                _sleep_ms(45)
+            self.led.value(0)
         except Exception:
             pass
 
@@ -448,7 +477,8 @@ class WeatherDisplay:
 
             self.last_card_lines = lines
             self.last_card_title = card_title
-            # Status LED heartbeat is now reserved exclusively for Google Sheets writes
+            # Check if 20-second Google Sheets LED timer should expire
+            self.check_led_timer()
 
         except Exception:
             pass
