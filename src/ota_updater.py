@@ -1,6 +1,10 @@
 """
 OTA (Over-The-Air) Firmware Updater for Davis VP2 Weather Station
-Downloads pre-compiled bytecode (.mpy) directly from GitHub over HTTPS.
+Downloads pre-compiled bytecode (.mpy) from GitHub, trying several routes in order:
+  1. GitHub directly over HTTPS
+  2. Cloudflare Worker proxy over HTTPS
+  3. Cloudflare Worker proxy over plain HTTP (last resort)
+Every file is verified against the SHA-256 listed in version.json before installing.
 Safe atomic downloads with automatic rollback on error.
 """
 
@@ -27,6 +31,16 @@ try:
 except ImportError:
     import os
 
+try:
+    import uhashlib as hashlib
+except ImportError:
+    import hashlib
+
+try:
+    import ubinascii as binascii
+except ImportError:
+    import binascii
+
 IS_ESP32 = sys.platform == "esp32"
 LOCAL_VERSION_FILE = "data/version.json"
 
@@ -50,25 +64,32 @@ def save_local_version(ver_str):
         pass
 
 
-def _download_file_https(host, path, target_path):
+def _download_file(host, path, target_path, use_ssl=True, port=None):
     """
-    Download a file from an HTTPS host using chunked streaming.
+    Download a file over HTTPS or plain HTTP using chunked streaming.
     Returns (success_bool, status_line)
     """
     s = None
     try:
+        if port is None:
+            port = 443 if use_ssl else 80
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(12)
-        s.connect((host, 443))
-        # Universal positional wrap_socket with SNI (server_hostname)
-        ss = ssl.wrap_socket(s, False, None, None, 0, None, host)
+        s.connect((host, port))
+        if use_ssl:
+            # Universal positional wrap_socket with SNI (server_hostname)
+            ss = ssl.wrap_socket(s, False, None, None, 0, None, host)
+        else:
+            ss = s
+        rd = ss.read if hasattr(ss, "read") else ss.recv
+        wr = ss.write if hasattr(ss, "write") else ss.sendall
 
         req = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: ESP32-MicroPython-OTA\r\nConnection: close\r\n\r\n"
-        ss.write(req.encode())
+        wr(req.encode())
 
         header_bytes = b""
         while b"\r\n\r\n" not in header_bytes:
-            chunk = ss.read(128)
+            chunk = rd(128)
             if not chunk:
                 break
             header_bytes += chunk
@@ -88,7 +109,7 @@ def _download_file_https(host, path, target_path):
             if initial_body:
                 f.write(initial_body)
             while True:
-                chunk = ss.read(512)
+                chunk = rd(512)
                 if not chunk:
                     break
                 f.write(chunk)
@@ -104,26 +125,76 @@ def _download_file_https(host, path, target_path):
         return False, str(e)
 
 
-def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=None):
+def _sha256_file(path):
+    """Hex SHA-256 of a file, read in small chunks to spare RAM"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(512)
+            if not chunk:
+                break
+            h.update(chunk)
+    return binascii.hexlify(h.digest()).decode()
+
+
+def _build_sources(repo_user, repo_name, branch, proxy_host):
+    """Ordered list of (label, host, path_prefix, use_ssl) download routes"""
+    sources = [("GitHub", "raw.githubusercontent.com", "/" + repo_user + "/" + repo_name + "/" + branch, True)]
+    if proxy_host:
+        sources.append(("Proxy HTTPS", proxy_host, "", True))
+        sources.append(("Proxy HTTP", proxy_host, "", False))
+    return sources
+
+
+def _fetch(sources, start_idx, rel_path, target_path, expected_sha=None):
+    """
+    Try every source (starting with the last one that worked) until the file downloads
+    and, when expected_sha is given, matches it. Returns (ok, index_of_source_used, last_error).
+    """
+    last_err = ""
+    n = len(sources)
+    for k in range(n):
+        i = (start_idx + k) % n
+        label, host, prefix, use_ssl = sources[i]
+        ok, status = _download_file(host, prefix + "/" + rel_path, target_path, use_ssl)
+        if ok and expected_sha:
+            try:
+                got = _sha256_file(target_path)
+            except Exception as e:
+                got = "error: {}".format(e)
+            if got != expected_sha:
+                ok, status = False, "SHA-256 no coincide"
+        if ok:
+            return True, i, ""
+        last_err = "{}: {}".format(label, status)
+        print("[OTA] {} fallo para {} ({})".format(label, rel_path, status))
+        try:
+            os.remove(target_path)
+        except Exception:
+            pass
+        if IS_ESP32:
+            import gc
+            gc.collect()
+    return False, start_idx, last_err
+
+
+def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=None, proxy_host=None):
     """
     Check GitHub for newer firmware version.
     If available, downloads all updated .mpy files atomically and reboots.
+    proxy_host: Cloudflare Worker hostname used as fallback route (None disables it).
     """
-    host = "raw.githubusercontent.com"
-    manifest_path = "/" + repo_user + "/" + repo_name + "/" + branch + "/version.json"
+    sources = _build_sources(repo_user, repo_name, branch, proxy_host)
 
     local_ver = get_local_version()
     print("[OTA] Comprobando actualizaciones en GitHub (version local: v{})...".format(local_ver))
 
     tmp_manifest = "data/version_remote.json"
-    ok, status = _download_file_https(host, manifest_path, tmp_manifest)
+    ok, src_idx, err = _fetch(sources, 0, "version.json", tmp_manifest)
     if not ok:
-        print("[OTA] No se pudo obtener version.json de GitHub ({})".format(status))
-        try:
-            os.remove(tmp_manifest)
-        except Exception:
-            pass
+        print("[OTA] No se pudo obtener version.json por ninguna ruta ({})".format(err))
         return False
+    print("[OTA] Manifiesto obtenido via {}".format(sources[src_idx][0]))
 
     manifest = None
     try:
@@ -154,7 +225,6 @@ def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branc
         remote_file = item["remote"]
         local_file = item["local"]
         tmp_file = local_file + ".tmp"
-        file_path = "/" + repo_user + "/" + repo_name + "/" + branch + "/" + remote_file
 
         print("[OTA] [{}/{}] Descargando {}...".format(i, len(files), remote_file))
         if display and display.has_oled:
@@ -168,19 +238,15 @@ def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branc
             except Exception:
                 pass
 
-        f_ok, f_status = _download_file_https(host, file_path, tmp_file)
+        f_ok, src_idx, f_err = _fetch(sources, src_idx, remote_file, tmp_file, item.get("sha256"))
         if not f_ok:
-            print("[OTA] ERROR descargando {}: {}".format(remote_file, f_status))
+            print("[OTA] ERROR descargando {}: {}".format(remote_file, f_err))
             # Clean up all downloaded tmp files to avoid half-baked installs
-            for f in downloaded_tmp:
+            for t_file, _ in downloaded_tmp:
                 try:
-                    os.remove(f)
+                    os.remove(t_file)
                 except Exception:
                     pass
-            try:
-                os.remove(tmp_file)
-            except Exception:
-                pass
             if display and display.has_oled:
                 display.show_message("ERROR OTA", "Fallo descarga", "Conservando ver", "previa OK")
                 time.sleep(2)
@@ -188,8 +254,8 @@ def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branc
 
         downloaded_tmp.append((tmp_file, local_file))
 
-    # All files downloaded successfully! Apply them atomically
-    print("[OTA] Todos los archivos descargados OK. Aplicando nuevo firmware...")
+    # All files downloaded and verified! Apply them atomically
+    print("[OTA] Todos los archivos descargados y verificados. Aplicando nuevo firmware...")
     for tmp_file, local_file in downloaded_tmp:
         try:
             try:

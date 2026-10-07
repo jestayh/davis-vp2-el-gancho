@@ -9,6 +9,7 @@ Usage:
 import sys
 import os
 import json
+import hashlib
 import datetime
 import subprocess
 
@@ -71,11 +72,17 @@ def main():
         else:
             print(f"  [OMITIDO] {src} no existe")
 
-    # 3. Guardar version.json
+    # 3. Guardar version.json (lista de archivos con huella SHA-256, verificada por el ESP32)
     print("\n[3/4] Actualizando version.json...")
     v_data["version"] = new_ver
     v_data["date"] = today_str
     v_data["description"] = desc
+    v_data["files"] = []
+    for src, dst in FILES_TO_COMPILE:
+        if os.path.exists(dst):
+            with open(dst, "rb") as f:
+                sha = hashlib.sha256(f.read()).hexdigest()
+            v_data["files"].append({"remote": dst, "local": dst, "sha256": sha})
     with open(VERSION_FILE, "w", encoding="utf-8") as f:
         json.dump(v_data, f, indent=2, ensure_ascii=False)
     print("  [OK] version.json guardado.")

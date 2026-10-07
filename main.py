@@ -33,6 +33,8 @@ CONSOLE_CLOCK_TOLERANCE_SECONDS = getattr(_config, "CONSOLE_CLOCK_TOLERANCE_SECO
 CONSOLE_CLOCK_CHECK_INTERVAL_SECONDS = 86400
 CONSOLE_CLOCK_RETRY_SECONDS = 3600
 OTA_CHECK_INTERVAL_SECONDS = getattr(_config, "OTA_CHECK_INTERVAL_SECONDS", 86400)
+# Cloudflare Worker used as fallback route when GitHub cannot be reached directly ("" disables it)
+OTA_PROXY_HOST = getattr(_config, "OTA_PROXY_HOST", "davis-ota-proxy.estayh-jose.workers.dev")
 
 IS_ESP32 = sys.platform == "esp32"
 _led_p = STATUS_LED_PIN if globals().get("ENABLE_STATUS_LED", True) else None
@@ -179,7 +181,8 @@ def run_ota_check():
         return
     try:
         import src.ota_updater as ota
-        ota.check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=display)
+        ota.check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main",
+                             display=display, proxy_host=OTA_PROXY_HOST)
     except Exception as ota_err:
         log("[OTA] Error comprobando actualizaciones: {}".format(ota_err))
     finally:

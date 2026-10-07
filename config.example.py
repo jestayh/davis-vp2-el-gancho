@@ -74,4 +74,7 @@ CONSOLE_CLOCK_TOLERANCE_SECONDS = 30
 # ==============================================================================
 # The ESP32 looks for a newer version on GitHub at boot and then every this many seconds.
 OTA_CHECK_INTERVAL_SECONDS = 86400
+# Fallback route when GitHub cannot be reached directly: Cloudflare Worker from
+# cloudflare/ota_worker.js (tried over HTTPS, then HTTP). "" disables the fallback.
+OTA_PROXY_HOST = "davis-ota-proxy.your-subdomain.workers.dev"
 
