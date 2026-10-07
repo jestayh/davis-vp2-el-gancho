@@ -9,12 +9,13 @@
  *   GET /version.json            -> .../main/version.json
  *   GET /app.mpy                 -> .../main/app.mpy
  *   GET /src/<nombre>.mpy        -> .../main/src/<nombre>.mpy
+ *   GET /tools/ota_rescue.py     -> .../main/tools/ota_rescue.py (instalador de emergencia)
  *
  * El ESP32 verifica la huella SHA-256 de cada archivo contra version.json.
  */
 
 const ORIGIN = "https://raw.githubusercontent.com/jestayh/davis-vp2-el-gancho/main";
-const ALLOWED = /^\/(version\.json|app\.mpy|src\/[A-Za-z0-9_]+\.mpy)$/;
+const ALLOWED = /^\/(version\.json|app\.mpy|src\/[A-Za-z0-9_]+\.mpy|tools\/ota_rescue\.py)$/;
 
 export default {
   async fetch(request) {
@@ -33,7 +34,8 @@ export default {
       return new Response("Upstream error " + upstream.status, { status: upstream.status });
     }
 
-    const type = path.endsWith(".json") ? "application/json" : "application/octet-stream";
+    const type = path.endsWith(".json") ? "application/json"
+      : path.endsWith(".py") ? "text/plain; charset=utf-8" : "application/octet-stream";
     return new Response(upstream.body, {
       status: 200,
       headers: { "Content-Type": type, "Cache-Control": "no-store" },
