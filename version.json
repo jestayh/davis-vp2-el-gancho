@@ -6,6 +6,7 @@
     {"remote": "app.mpy", "local": "app.mpy"},
     {"remote": "src/display.mpy", "local": "src/display.mpy"},
     {"remote": "src/davis_reader.mpy", "local": "src/davis_reader.mpy"},
+    {"remote": "src/data_logger.mpy", "local": "src/data_logger.mpy"},
     {"remote": "src/google_sheets.mpy", "local": "src/google_sheets.mpy"},
     {"remote": "src/history_recovery.mpy", "local": "src/history_recovery.mpy"},
     {"remote": "src/ota_updater.mpy", "local": "src/ota_updater.mpy"}

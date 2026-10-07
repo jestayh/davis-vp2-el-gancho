@@ -7,6 +7,8 @@ import os
 import time
 import math
 
+from src.davis_reader import get_local_time_tuple
+
 CSV_FIELDNAMES = [
     "timestamp",
     # Barometer
@@ -230,7 +232,8 @@ class DailyStats:
         self.day_rain_mm = 0.0
 
     def update(self, data, uploaded):
-        t = time.localtime()
+        # Local calendar day (the ESP32 RTC runs in UTC, so time.localtime() would roll over at 21:00)
+        t = get_local_time_tuple()
         day = t[2]
         if self.current_day != day:
             self.current_day = day

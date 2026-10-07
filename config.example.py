@@ -60,3 +60,18 @@ WIFI_PASSWORD = "password123"
 # Leave empty "" to disable cloud sync
 GOOGLE_APPS_SCRIPT_URL = ""
 
+# ==============================================================================
+# 7. Davis console clock auto-correction (optional, defaults shown)
+# ==============================================================================
+# Once at boot and then every 24 h the ESP32 reads the console clock (GETTIME) and,
+# if it differs from local time by more than the tolerance, rewrites it (SETTIME).
+# The console resets daily/monthly rain at its own midnight, so its clock must be right.
+ENABLE_CONSOLE_CLOCK_SYNC = True
+CONSOLE_CLOCK_TOLERANCE_SECONDS = 30
+
+# ==============================================================================
+# 8. OTA firmware update check (optional, default shown)
+# ==============================================================================
+# The ESP32 looks for a newer version on GitHub at boot and then every this many seconds.
+OTA_CHECK_INTERVAL_SECONDS = 86400
+

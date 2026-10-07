@@ -18,6 +18,7 @@ FILES_TO_COMPILE = [
     ("main.py", "app.mpy"),
     ("src/display.py", "src/display.mpy"),
     ("src/davis_reader.py", "src/davis_reader.mpy"),
+    ("src/data_logger.py", "src/data_logger.mpy"),
     ("src/google_sheets.py", "src/google_sheets.mpy"),
     ("src/history_recovery.py", "src/history_recovery.mpy"),
     ("src/ota_updater.py", "src/ota_updater.mpy"),

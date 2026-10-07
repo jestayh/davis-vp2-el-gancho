@@ -44,3 +44,6 @@ secrets.json
 cp210x_driver/
 davis_update_console_firmware/
 
+
+# Local experiments
+scratch/

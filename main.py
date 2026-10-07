@@ -20,11 +20,19 @@ from config import (
     GOOGLE_APPS_SCRIPT_URL,
     STATUS_LED_PIN, ENABLE_STATUS_LED, STATUS_LED_MODE
 )
-from src.davis_reader import query_station, log, format_timestamp_local, format_timestamp_utc
+from src.davis_reader import query_station, sync_console_time, log, format_timestamp_local, format_timestamp_utc
 from src.weather_underground import upload
 from src.data_logger import log_reading_csv, DailyStats
 from src.display import WeatherDisplay
 from src.google_sheets import upload_to_google_sheets
+import config as _config
+
+# Optional settings (defaults apply when an older config.py on the device lacks them)
+ENABLE_CONSOLE_CLOCK_SYNC = getattr(_config, "ENABLE_CONSOLE_CLOCK_SYNC", True)
+CONSOLE_CLOCK_TOLERANCE_SECONDS = getattr(_config, "CONSOLE_CLOCK_TOLERANCE_SECONDS", 30)
+CONSOLE_CLOCK_CHECK_INTERVAL_SECONDS = 86400
+CONSOLE_CLOCK_RETRY_SECONDS = 3600
+OTA_CHECK_INTERVAL_SECONDS = getattr(_config, "OTA_CHECK_INTERVAL_SECONDS", 86400)
 
 IS_ESP32 = sys.platform == "esp32"
 _led_p = STATUS_LED_PIN if globals().get("ENABLE_STATUS_LED", True) else None
@@ -147,6 +155,43 @@ def connect_wifi_if_needed(show_display=False):
         log("[ERROR] WiFi setup error: {}".format(e))
 
 
+def run_console_clock_sync():
+    """Check/correct the Davis console clock. Returns seconds until the next check is due."""
+    if not ENABLE_CONSOLE_CLOCK_SYNC:
+        return CONSOLE_CLOCK_CHECK_INTERVAL_SECONDS
+    try:
+        status, _ = sync_console_time(
+            DAVIS_HOST, DAVIS_PORT,
+            tolerance_s=CONSOLE_CLOCK_TOLERANCE_SECONDS,
+            timeout=SOCKET_TIMEOUT_SECONDS
+        )
+    except Exception as e:
+        log("[RELOJ] Error: {}".format(e))
+        status = "error"
+    if status in ("ok", "set"):
+        return CONSOLE_CLOCK_CHECK_INTERVAL_SECONDS
+    return CONSOLE_CLOCK_RETRY_SECONDS
+
+
+def run_ota_check():
+    """Look for a newer firmware version on GitHub (ESP32 only). Reboots itself after an update."""
+    if not IS_ESP32:
+        return
+    try:
+        import src.ota_updater as ota
+        ota.check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=display)
+    except Exception as ota_err:
+        log("[OTA] Error comprobando actualizaciones: {}".format(ota_err))
+    finally:
+        try:
+            if "src.ota_updater" in sys.modules:
+                del sys.modules["src.ota_updater"]
+        except Exception:
+            pass
+        import gc
+        gc.collect()
+
+
 def main(max_cycles=None):
     if IS_ESP32:
         time.sleep(2)
@@ -167,21 +212,12 @@ def main(max_cycles=None):
     connect_wifi_if_needed(show_display=True)
     display.set_station_id(WU_STATION_ID)
 
-    # Check for Over-The-Air (OTA) firmware updates from GitHub
-    if IS_ESP32:
-        try:
-            import src.ota_updater as ota
-            ota.check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=display)
-        except Exception as ota_err:
-            log("[OTA] Error comprobando actualizaciones: {}".format(ota_err))
-        finally:
-            try:
-                if "src.ota_updater" in sys.modules:
-                    del sys.modules["src.ota_updater"]
-            except Exception:
-                pass
-            import gc
-            gc.collect()
+    # Check for Over-The-Air (OTA) firmware updates from GitHub (also repeated daily in the main loop)
+    run_ota_check()
+    next_ota_check = time.time() + OTA_CHECK_INTERVAL_SECONDS
+
+    # Make sure the console clock matches local time before reading its archive
+    next_clock_check = time.time() + run_console_clock_sync()
 
     # Check and backfill historical data if any gap occurred
     if ENABLE_DMPAFT_RECOVERY:
@@ -367,6 +403,15 @@ def main(max_cycles=None):
                 stats.update(data, True)
                 if cycle % 20 == 0:
                     log(stats.get_summary())
+
+                # 5b. Daily Davis console clock check (skipped in cycles that upload to WU/Sheets)
+                if not wu_due and not drive_due and time.time() >= next_clock_check:
+                    next_clock_check = time.time() + run_console_clock_sync()
+
+                # 5c. Daily OTA check, so updates arrive without rebooting the ESP32
+                if IS_ESP32 and not wu_due and not drive_due and time.time() >= next_ota_check:
+                    next_ota_check = time.time() + OTA_CHECK_INTERVAL_SECONDS
+                    run_ota_check()
 
             except KeyboardInterrupt:
                 raise

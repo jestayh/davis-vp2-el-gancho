@@ -75,7 +75,7 @@ def get_utc_time_tuple(secs=None):
     """Return current or specified time tuple in UTC"""
     if secs is None:
         secs = time.time()
-    return time.localtime(secs)
+    return time.gmtime(secs)
 
 
 def get_local_time_tuple(secs=None):
@@ -84,7 +84,7 @@ def get_local_time_tuple(secs=None):
         secs = time.time()
     offset = get_effective_timezone_offset(secs)
     local_secs = int(secs + (offset * 3600))
-    return time.localtime(local_secs)
+    return time.gmtime(local_secs)
 
 
 def format_timestamp_local(secs=None):
@@ -664,6 +664,145 @@ def wakeup_console(sock, max_retries=2):
             pass
         time.sleep(0.1)
     return False
+
+
+def _civil_to_secs(year, month, day, hour, minute, sec):
+    """Seconds since 1970-01-01 for a civil date/time (platform and timezone independent)"""
+    if month <= 2:
+        year -= 1
+    era = year // 400
+    yoe = year - era * 400
+    doy = (153 * (month + (-3 if month > 2 else 9)) + 2) // 5 + day - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return (era * 146097 + doe - 719468) * 86400 + hour * 3600 + minute * 60 + sec
+
+
+def _drain_socket(sock, timeout):
+    """Discard any stale bytes waiting on the socket"""
+    try:
+        sock.setblocking(False)
+        while True:
+            junk = sock.recv(1024)
+            if not junk:
+                break
+    except Exception:
+        pass
+    finally:
+        try:
+            sock.setblocking(True)
+        except Exception:
+            pass
+        sock.settimeout(timeout)
+
+
+def _wait_ack(sock, timeout):
+    """Read until the console's ACK (0x06), skipping stray newline bytes. False on NAK/CANCEL/timeout."""
+    start_t = time.time()
+    while (time.time() - start_t) < timeout:
+        b = sock.recv(1)
+        if not b:
+            return False
+        if b == b"\x06":
+            return True
+        if b not in (b"\n", b"\r"):
+            return False
+    return False
+
+
+def _read_console_time(sock, timeout):
+    """Return console clock as (Y, M, D, h, m, s), or None on no/invalid reply"""
+    wakeup_console(sock)
+    _drain_socket(sock, timeout)
+    sock.sendall(b"GETTIME\n")
+    if not _wait_ack(sock, timeout):
+        return None
+    resp = b""
+    start_t = time.time()
+    while len(resp) < 8 and (time.time() - start_t) < timeout:
+        chunk = sock.recv(8 - len(resp))
+        if not chunk:
+            break
+        resp += chunk
+    if len(resp) < 8:
+        return None
+    data = resp[:6]
+    if calculate_crc(data) != struct.unpack(">H", resp[6:8])[0]:
+        return None
+    sec, minute, hour, day, month, yr = struct.unpack("BBBBBB", data)
+    return (yr + 1900, month, day, hour, minute, sec)
+
+
+def sync_console_time(host, port, tolerance_s=30, timeout=4.0):
+    """
+    Compare the Davis console clock against the ESP32 local time (NTP + Chile offset)
+    and rewrite the console clock (SETTIME) when they differ by more than tolerance_s.
+    The console rolls over daily/monthly rain at its own midnight, so its clock must
+    match local time.
+
+    Returns (status, diff_seconds) where status is one of:
+      "ok"    console already in sync
+      "set"   console clock corrected
+      "skip"  local clock not NTP-synchronized yet, nothing touched
+      "error" no/invalid reply from console, or SETTIME rejected
+    diff_seconds is (console - local) before any correction, or None.
+    """
+    if time.gmtime()[0] < 2025:
+        log("[RELOJ] Reloj local sin sincronizar por NTP; se omite ajuste de la consola")
+        return "skip", None
+
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+
+        console_t = _read_console_time(sock, timeout)
+        if console_t is None:
+            log("[RELOJ] La consola no respondio a GETTIME")
+            return "error", None
+
+        local_t = get_local_time_tuple()
+        diff = _civil_to_secs(*console_t) - _civil_to_secs(*local_t[:6])
+        if abs(diff) <= tolerance_s:
+            log("[RELOJ] Hora de la consola OK (desfase {}s)".format(diff))
+            return "ok", diff
+
+        log("[RELOJ] Consola desfasada {}s (consola {:02d}:{:02d}:{:02d} vs local {:02d}:{:02d}:{:02d}). Corrigiendo...".format(
+            diff, console_t[3], console_t[4], console_t[5], local_t[3], local_t[4], local_t[5]
+        ))
+
+        wakeup_console(sock)
+        _drain_socket(sock, timeout)
+        sock.sendall(b"SETTIME\n")
+        if not _wait_ack(sock, timeout):
+            log("[RELOJ] La consola rechazo SETTIME")
+            return "error", diff
+
+        t = get_local_time_tuple()
+        payload = struct.pack("BBBBBB", t[5], t[4], t[3], t[2], t[1], t[0] - 1900)
+        sock.sendall(payload + struct.pack(">H", calculate_crc(payload)))
+        if not _wait_ack(sock, timeout):
+            log("[RELOJ] La consola rechazo la nueva hora (CRC)")
+            return "error", diff
+
+        # Verify by reading the clock back
+        after = _read_console_time(sock, timeout)
+        if after is not None:
+            new_diff = _civil_to_secs(*after) - _civil_to_secs(*get_local_time_tuple()[:6])
+            if abs(new_diff) > tolerance_s:
+                log("[RELOJ] Verificacion fallida: desfase restante {}s".format(new_diff))
+                return "error", diff
+        log("[RELOJ] Hora de la consola corregida")
+        return "set", diff
+    except Exception as e:
+        log("[RELOJ] Error sincronizando hora de la consola: {}".format(e))
+        return "error", None
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 def query_station(host, port, timeout=3.5):
