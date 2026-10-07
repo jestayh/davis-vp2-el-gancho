@@ -1,12 +1,12 @@
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "date": "2026-10-07",
-  "description": "OTA con respaldo via Cloudflare Worker y verificacion SHA-256",
+  "description": "Actualiza al detectar version nueva anunciada por el proxy de Sheets",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "0664a0922b082aad0b199744007d7000c7e7b54d4cd4c166c2a7f2a7e5d1e908"
+      "sha256": "f85179d0bdd37d6dfe7e77717622391f692ff029c1b39f032c0ecee9dc822fda"
     },
     {
       "remote": "src/display.mpy",
@@ -26,7 +26,7 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "530692250e743a2918b5932cbbb77dc636b04acb94968b3c3c4364081ca5d774"
+      "sha256": "84804e10706dd1d9d167ba552a006646068c03b271dc7ec581f80711714ddb1c"
     },
     {
       "remote": "src/history_recovery.mpy",
