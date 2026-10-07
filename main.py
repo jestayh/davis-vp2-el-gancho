@@ -25,6 +25,7 @@ from src.weather_underground import upload
 from src.data_logger import log_reading_csv, DailyStats
 from src.display import WeatherDisplay
 from src.google_sheets import upload_to_google_sheets
+import src.google_sheets as gsheets
 import config as _config
 
 # Optional settings (defaults apply when an older config.py on the device lacks them)
@@ -35,6 +36,8 @@ CONSOLE_CLOCK_RETRY_SECONDS = 3600
 OTA_CHECK_INTERVAL_SECONDS = getattr(_config, "OTA_CHECK_INTERVAL_SECONDS", 86400)
 # Cloudflare Worker used as fallback route when GitHub cannot be reached directly ("" disables it)
 OTA_PROXY_HOST = getattr(_config, "OTA_PROXY_HOST", "davis-ota-proxy.estayh-jose.workers.dev")
+# Minimum gap between OTA checks triggered by the version announced by the Sheets proxy
+OTA_HINT_MIN_INTERVAL_SECONDS = 3600
 
 IS_ESP32 = sys.platform == "esp32"
 _led_p = STATUS_LED_PIN if globals().get("ENABLE_STATUS_LED", True) else None
@@ -175,6 +178,16 @@ def run_console_clock_sync():
     return CONSOLE_CLOCK_RETRY_SECONDS
 
 
+def read_installed_fw_version():
+    """Firmware version recorded by the OTA updater (same default as src/ota_updater.py)"""
+    try:
+        import json
+        with open("data/version.json", "r") as f:
+            return json.load(f).get("version", "1.0.0")
+    except Exception:
+        return "1.0.0"
+
+
 def run_ota_check():
     """Look for a newer firmware version on GitHub (ESP32 only). Reboots itself after an update."""
     if not IS_ESP32:
@@ -218,6 +231,8 @@ def main(max_cycles=None):
     # Check for Over-The-Air (OTA) firmware updates from GitHub (also repeated daily in the main loop)
     run_ota_check()
     next_ota_check = time.time() + OTA_CHECK_INTERVAL_SECONDS
+    installed_fw = read_installed_fw_version()
+    next_hint_ota_check = 0
 
     # Make sure the console clock matches local time before reading its archive
     next_clock_check = time.time() + run_console_clock_sync()
@@ -391,6 +406,13 @@ def main(max_cycles=None):
                                         break
                                 if not pending_drive_records:
                                     log("[DRIVE] Todos los registros pendientes fueron sincronizados a Google Sheets!")
+
+                            # The Sheets proxy announces the latest published firmware: update without waiting a day
+                            fw_hint = gsheets.FW_HINT
+                            if IS_ESP32 and fw_hint and fw_hint != installed_fw and time.time() >= next_hint_ota_check:
+                                log("[OTA] El proxy anuncia la version v{} (instalada v{}). Revisando...".format(fw_hint, installed_fw))
+                                next_hint_ota_check = time.time() + OTA_HINT_MIN_INTERVAL_SECONDS
+                                run_ota_check()
                         else:
                             # Internet outage: store in memory buffer to re-upload when connection returns
                             if len(pending_drive_records) < 100:

@@ -18,6 +18,9 @@ import sys
 
 IS_ESP32 = sys.platform == "esp32"
 
+# Latest firmware version announced by the Cloudflare proxy (X-Davis-Fw header) on the last upload
+FW_HINT = None
+
 
 def log(msg):
     print("[GoogleDrive] {}".format(msg))
@@ -144,6 +147,17 @@ def upload_to_google_sheets(script_url, data, timeout=12):
             ss.write(req)
             del req
             raw_resp = ss.readline()
+
+            # Scan response headers for the firmware version hint
+            global FW_HINT
+            FW_HINT = None
+            for _ in range(20):
+                line = ss.readline()
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+                if line[:11].lower() == b"x-davis-fw:":
+                    FW_HINT = line[11:].strip().decode("ascii", "ignore") or None
+
             if is_ssl:
                 try:
                     ss.close()
