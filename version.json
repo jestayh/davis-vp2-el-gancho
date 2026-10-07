@@ -1,35 +1,42 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "date": "2026-10-07",
-  "description": "Corrige hora de consola a diario, OTA diario y estadisticas en hora local",
+  "description": "OTA con respaldo via Cloudflare Worker y verificacion SHA-256",
   "files": [
     {
       "remote": "app.mpy",
-      "local": "app.mpy"
+      "local": "app.mpy",
+      "sha256": "0664a0922b082aad0b199744007d7000c7e7b54d4cd4c166c2a7f2a7e5d1e908"
     },
     {
       "remote": "src/display.mpy",
-      "local": "src/display.mpy"
+      "local": "src/display.mpy",
+      "sha256": "0c98b2c9ac2daca9b68d7d43ab6f86b4218a9d154f30e8799d0ead170aa4310c"
     },
     {
       "remote": "src/davis_reader.mpy",
-      "local": "src/davis_reader.mpy"
+      "local": "src/davis_reader.mpy",
+      "sha256": "860ce1bdf215620fc0c63e32d12887c43940df6030df6fe38fc3798873e60224"
     },
     {
       "remote": "src/data_logger.mpy",
-      "local": "src/data_logger.mpy"
+      "local": "src/data_logger.mpy",
+      "sha256": "d76dff32922b6506172572798e3810d99c7f9a6d0ae43353ecb6825e858f3136"
     },
     {
       "remote": "src/google_sheets.mpy",
-      "local": "src/google_sheets.mpy"
+      "local": "src/google_sheets.mpy",
+      "sha256": "530692250e743a2918b5932cbbb77dc636b04acb94968b3c3c4364081ca5d774"
     },
     {
       "remote": "src/history_recovery.mpy",
-      "local": "src/history_recovery.mpy"
+      "local": "src/history_recovery.mpy",
+      "sha256": "9fbedea2e7472dddcc11fc52db11b7566f8d93ada3d80c418700c538ffde0b93"
     },
     {
       "remote": "src/ota_updater.mpy",
-      "local": "src/ota_updater.mpy"
+      "local": "src/ota_updater.mpy",
+      "sha256": "5bd30ba13ae69861e2e529677cb83c43caff5f01448fd41e85f1cd7abca668d5"
     }
   ]
 }
