@@ -1,12 +1,12 @@
 {
-  "version": "1.0.3",
-  "date": "2026-10-07",
-  "description": "Actualiza al detectar version nueva anunciada por el proxy de Sheets",
+  "version": "1.0.4",
+  "date": "2026-10-08",
+  "description": "Vuelta atras automatica si una version nueva no logra arrancar",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "f85179d0bdd37d6dfe7e77717622391f692ff029c1b39f032c0ecee9dc822fda"
+      "sha256": "82dc85bcb0795e36cc6d871b73edbfbed2619c63df1c89cd8506c09f6fbba36d"
     },
     {
       "remote": "src/display.mpy",
@@ -36,7 +36,7 @@
     {
       "remote": "src/ota_updater.mpy",
       "local": "src/ota_updater.mpy",
-      "sha256": "5bd30ba13ae69861e2e529677cb83c43caff5f01448fd41e85f1cd7abca668d5"
+      "sha256": "09e9fd6b5fcf93fa528895e7b1229201cc274eea09b05210bef8a9c4164dbc29"
     }
   ]
 }
