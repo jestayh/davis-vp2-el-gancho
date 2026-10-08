@@ -43,6 +43,10 @@ except ImportError:
 
 IS_ESP32 = sys.platform == "esp32"
 LOCAL_VERSION_FILE = "data/version.json"
+# Rollback support (read by the /main.py launcher on the device)
+PENDING_FILE = "data/ota_pending.json"   # version under trial until the app confirms a good boot
+BAD_VERSION_FILE = "data/ota_bad.json"   # version rolled back by the launcher; never reinstalled
+BACKUP_DIR = "backup"
 
 
 def get_local_version():
@@ -62,6 +66,59 @@ def save_local_version(ver_str):
             json.dump({"version": str(ver_str), "installed_at": time.time()}, f)
     except Exception:
         pass
+
+
+def get_bad_version():
+    """Version that the launcher rolled back after failed boots (None if none)"""
+    try:
+        with open(BAD_VERSION_FILE, "r") as f:
+            return json.load(f).get("version")
+    except Exception:
+        return None
+
+
+def _exists(path):
+    try:
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+
+
+def _makedirs(path):
+    """Create every directory level of path (os.makedirs is not available in MicroPython)"""
+    cur = ""
+    for part in path.split("/"):
+        cur = part if not cur else cur + "/" + part
+        try:
+            os.mkdir(cur)
+        except OSError:
+            pass
+
+
+def _copy_file(src, dst):
+    with open(src, "rb") as fi:
+        with open(dst, "wb") as fo:
+            while True:
+                chunk = fi.read(512)
+                if not chunk:
+                    break
+                fo.write(chunk)
+
+
+def _backup_and_mark_pending(local_files, new_ver, old_ver):
+    """Copy the files about to be replaced into BACKUP_DIR and record the trial install"""
+    backed_up = []
+    for local_file in local_files:
+        if _exists(local_file):
+            dst = BACKUP_DIR + "/" + local_file
+            slash = local_file.rfind("/")
+            _makedirs(BACKUP_DIR + ("/" + local_file[:slash] if slash != -1 else ""))
+            _copy_file(local_file, dst)
+            backed_up.append(local_file)
+    with open(PENDING_FILE, "w") as f:
+        json.dump({"version": new_ver, "previous": old_ver, "files": local_files,
+                   "backed_up": backed_up, "boots": 0}, f)
 
 
 def _download_file(host, path, target_path, use_ssl=True, port=None):
@@ -209,6 +266,9 @@ def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branc
     if not remote_ver or remote_ver == local_ver:
         print("[OTA] Firmware al dia (v{}). No se requieren actualizaciones.".format(local_ver))
         return False
+    if remote_ver == get_bad_version():
+        print("[OTA] v{} fue revertida por fallar al arrancar; se omite hasta que se publique otra version.".format(remote_ver))
+        return False
 
     print("\n" + "=" * 60)
     print("  [OTA] NUEVA VERSION DETECTADA: v{} -> v{}".format(local_ver, remote_ver))
@@ -253,6 +313,22 @@ def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branc
             return False
 
         downloaded_tmp.append((tmp_file, local_file))
+
+    # Keep a copy of the running version so the launcher can roll back if the new one fails to boot
+    try:
+        _backup_and_mark_pending([lf for _, lf in downloaded_tmp], remote_ver, local_ver)
+    except Exception as e:
+        print("[OTA] No se pudo respaldar la version actual ({}). Se cancela la actualizacion.".format(e))
+        for t_file, _ in downloaded_tmp:
+            try:
+                os.remove(t_file)
+            except Exception:
+                pass
+        try:
+            os.remove(PENDING_FILE)
+        except Exception:
+            pass
+        return False
 
     # All files downloaded and verified! Apply them atomically
     print("[OTA] Todos los archivos descargados y verificados. Aplicando nuevo firmware...")

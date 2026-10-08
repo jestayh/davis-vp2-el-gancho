@@ -188,6 +188,16 @@ def read_installed_fw_version():
         return "1.0.0"
 
 
+def confirm_ota_install():
+    """Mark a freshly OTA-installed version as good, so the /main.py launcher won't roll it back"""
+    try:
+        import os
+        os.remove("data/ota_pending.json")
+        log("[OTA] Version v{} confirmada: arranque correcto".format(read_installed_fw_version()))
+    except OSError:
+        pass  # no version under trial
+
+
 def run_ota_check():
     """Look for a newer firmware version on GitHub (ESP32 only). Reboots itself after an update."""
     if not IS_ESP32:
@@ -233,6 +243,7 @@ def main(max_cycles=None):
     next_ota_check = time.time() + OTA_CHECK_INTERVAL_SECONDS
     installed_fw = read_installed_fw_version()
     next_hint_ota_check = 0
+    ota_confirmed = False
 
     # Make sure the console clock matches local time before reading its archive
     next_clock_check = time.time() + run_console_clock_sync()
@@ -338,6 +349,9 @@ def main(max_cycles=None):
                     display.update_cloud_status(wu_ok=uploaded_wu, timestamp_str=data.get("timestamp"))
                     if uploaded_wu:
                         display.wu_flicker()
+                        if not ota_confirmed:
+                            confirm_ota_install()
+                            ota_confirmed = True
 
                 # 3. Synchronized CSV & Google Drive log (every CSV_LOG_INTERVAL_SECONDS)
                 if drive_due:
@@ -381,6 +395,9 @@ def main(max_cycles=None):
                         display.update_cloud_status(gdrive_ok=uploaded_gdrive, timestamp_str=record_data.get("timestamp"))
 
                         if uploaded_gdrive:
+                            if not ota_confirmed:
+                                confirm_ota_install()
+                                ota_confirmed = True
                             display.show_sheets_success(record_data.get("timestamp"))
                             display.sheets_success_pulse()
                             time.sleep(3.0)
