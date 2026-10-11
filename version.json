@@ -1,7 +1,7 @@
 {
-  "version": "1.0.4",
-  "date": "2026-10-08",
-  "description": "Vuelta atras automatica si una version nueva no logra arrancar",
+  "version": "1.0.5",
+  "date": "2026-10-11",
+  "description": "OTA por HTTP/1.0 y Worker HTTPS al final",
   "files": [
     {
       "remote": "app.mpy",
@@ -36,7 +36,7 @@
     {
       "remote": "src/ota_updater.mpy",
       "local": "src/ota_updater.mpy",
-      "sha256": "09e9fd6b5fcf93fa528895e7b1229201cc274eea09b05210bef8a9c4164dbc29"
+      "sha256": "67646855a0e248c51544aafd83acda23abc27ade54605636d5463208c9e2d99b"
     }
   ]
 }
