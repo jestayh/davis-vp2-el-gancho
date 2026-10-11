@@ -2,8 +2,8 @@
 OTA (Over-The-Air) Firmware Updater for Davis VP2 Weather Station
 Downloads pre-compiled bytecode (.mpy) from GitHub, trying several routes in order:
   1. GitHub directly over HTTPS
-  2. Cloudflare Worker proxy over HTTPS
-  3. Cloudflare Worker proxy over plain HTTP (last resort)
+  2. Cloudflare Worker proxy over plain HTTP
+  3. Cloudflare Worker proxy over HTTPS
 Every file is verified against the SHA-256 listed in version.json before installing.
 Safe atomic downloads with automatic rollback on error.
 """
@@ -141,7 +141,8 @@ def _download_file(host, path, target_path, use_ssl=True, port=None):
         rd = ss.read if hasattr(ss, "read") else ss.recv
         wr = ss.write if hasattr(ss, "write") else ss.sendall
 
-        req = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: ESP32-MicroPython-OTA\r\nConnection: close\r\n\r\n"
+        # HTTP/1.0 so servers never answer with Transfer-Encoding: chunked (the body is read raw)
+        req = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: ESP32-MicroPython-OTA\r\nConnection: close\r\n\r\n"
         wr(req.encode())
 
         header_bytes = b""
@@ -198,8 +199,10 @@ def _build_sources(repo_user, repo_name, branch, proxy_host):
     """Ordered list of (label, host, path_prefix, use_ssl) download routes"""
     sources = [("GitHub", "raw.githubusercontent.com", "/" + repo_user + "/" + repo_name + "/" + branch, True)]
     if proxy_host:
-        sources.append(("Proxy HTTPS", proxy_host, "", True))
+        # Plain HTTP before HTTPS: on the station's ESP32 the proxy TLS handshake hangs ~2 min and then
+        # fails for lack of RAM, while HTTP works (files are still verified against their SHA-256)
         sources.append(("Proxy HTTP", proxy_host, "", False))
+        sources.append(("Proxy HTTPS", proxy_host, "", True))
     return sources
 
 

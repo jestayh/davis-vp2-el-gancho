@@ -34,11 +34,13 @@ export default {
       return new Response("Upstream error " + upstream.status, { status: upstream.status });
     }
 
-    const type = path.endsWith(".json") ? "application/json"
-      : path.endsWith(".py") ? "text/plain; charset=utf-8" : "application/octet-stream";
-    return new Response(upstream.body, {
+    // Todo se entrega como binario con Content-Length: el ESP32 lee el cuerpo "en bruto" y
+    // no entiende Transfer-Encoding: chunked, que Cloudflare usa para tipos de texto
+    // (application/json, text/plain) aunque el cuerpo este completo.
+    const body = await upstream.arrayBuffer();
+    return new Response(body, {
       status: 200,
-      headers: { "Content-Type": type, "Cache-Control": "no-store" },
+      headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" },
     });
   },
 };
