@@ -431,6 +431,7 @@ def main(max_cycles=None):
                     last_logged_slot = current_slot
                     check_gap = True
                     gap_until = None
+                    last_day_rain_seen = None  # the next interval would include the skipped ones
                 elif drive_due:
                     aligned_utc_secs = current_slot * CSV_LOG_INTERVAL_SECONDS
                     record_data = dict(data)
@@ -438,11 +439,16 @@ def main(max_cycles=None):
                     record_data["timestamp_utc"] = format_timestamp_utc(aligned_utc_secs)
                     record_data["temp_out_hi_c"] = slot_temp_hi if slot_temp_hi is not None else data.get("temp_out_c")
                     record_data["temp_out_low_c"] = slot_temp_low if slot_temp_low is not None else data.get("temp_out_c")
-                    cur_rain = data.get("rain_day_mm", 0.0) or 0.0
-                    if last_day_rain_seen is not None and cur_rain >= last_day_rain_seen:
+                    cur_rain = data.get("rain_day_mm")
+                    if cur_rain is None or last_day_rain_seen is None:
+                        # First record after boot or a skipped slot: unknown here, the Apps Script
+                        # derives it from the day total of the previous row
+                        record_data["rain_interval_mm"] = None
+                    elif cur_rain >= last_day_rain_seen:
                         record_data["rain_interval_mm"] = round(cur_rain - last_day_rain_seen, 1)
                     else:
-                        record_data["rain_interval_mm"] = 0.0
+                        # The console reset the day total at midnight: all of it fell since then
+                        record_data["rain_interval_mm"] = round(cur_rain, 1)
                     last_day_rain_seen = cur_rain
                     slot_temp_hi = data.get("temp_out_c")
                     slot_temp_low = data.get("temp_out_c")

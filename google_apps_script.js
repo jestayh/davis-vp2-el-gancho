@@ -12,6 +12,7 @@
  * 5. Auto-archivado anual automático en Google Drive el 1 de enero.
  *
  * Funciones para ejecutar a mano desde el editor:
+ * - activarAvisos(): correo si la estación pasa 60 min sin enviar datos (y cuando vuelven).
  * - importarConsola(): rellena el hueco del 08-oct-2026 con la pestaña "Consola".
  * - repararHoja(): borra filas con fecha inválida y duplicados, y vacía Muestras/Tx erróneos.
  * - ordenarPorFecha(): reordena toda la hoja.
@@ -226,7 +227,8 @@ function buildRow_(headers, data, key) {
     } else if (h.indexOf("presion") !== -1 || h.indexOf("presión") !== -1 || h.indexOf("baro") !== -1) {
       val = v_(data.pressure_hpa, "");
     } else if (h.indexOf("lluvia int") !== -1 || h.indexOf("rain int") !== -1) {
-      val = v_(data.rain_interval_mm, 0.0);
+      // Vacía en el primer registro tras un reinicio: se deduce de la lluvia del día en fillDerived_
+      val = v_(data.rain_interval_mm, "");
     } else if (h.indexOf("tasa") !== -1 && h.indexOf("lluvia") !== -1) {
       val = v_(data.rain_rate_mm_per_hr, 0.0);
       // Acumulados: vacíos si no vienen (registros de archivo), se completan en fillDerived_
@@ -339,6 +341,30 @@ function upsertRow_(sheet, headers, row, key, fillMissing) {
     sheet.insertRowBefore(pos + 2);
     sheet.getRange(pos + 2, 1, 1, row.length).setValues([row]);
   }
+
+  // La fila siguiente (ahora en pos + 3) pudo quedar sin "Lluvia Int" por no tener la anterior
+  if (fillMissing) fillNextInterval_(sheet, headers, row, key, exists ? keys[pos + 1] : keys[pos], pos + 3);
+}
+
+/**
+ * Lluvia del intervalo a partir de la lluvia del día: solo si la fila anterior es exactamente
+ * 10 min antes (si hubo un hueco, la diferencia incluiría la lluvia de los registros faltantes).
+ * Tras la medianoche la consola reinicia el día, así que todo lo del día cayó en el intervalo.
+ */
+function intervalFromDay_(key, day, prevKey, prevDay) {
+  if (!prevKey || day === "" || prevDay === "" || keyMinutes_(key) - keyMinutes_(prevKey) !== 10) return "";
+  if (prevKey.substring(0, 10) !== key.substring(0, 10)) return round1_(num_(day));
+  return round1_(Math.max(0, num_(day) - num_(prevDay)));
+}
+
+function fillNextInterval_(sheet, headers, row, key, nextKey, nextRowNum) {
+  var cInt = colIndex_(headers, ["lluvia int"]);
+  var cDay = colIndex_(headers, ["lluvia d"]);
+  if (!nextKey || cInt < 0 || cDay < 0 || nextRowNum > sheet.getLastRow()) return;
+  var intCell = sheet.getRange(nextRowNum, cInt + 1);
+  if (intCell.getValue() !== "") return;
+  var value = intervalFromDay_(nextKey, sheet.getRange(nextRowNum, cDay + 1).getValue(), key, row[cDay]);
+  if (value !== "") intCell.setValue(value);
 }
 
 function num_(x) {
@@ -364,9 +390,10 @@ function fillDerived_(sheet, headers, row, key, keys, pos) {
   var cTrend = colIndex_(headers, ["tendencia"]);
   var cPres = colIndex_(headers, ["presi"]);
 
+  var needInt = cInt >= 0 && row[cInt] === "" && cDay >= 0 && row[cDay] !== "";
   var needRain = [cDay, cStorm, cMonth, cYear].some(function (c) { return c >= 0 && row[c] === ""; });
   var needTrend = cTrend >= 0 && row[cTrend] === "" && cPres >= 0 && row[cPres] !== "";
-  if ((!needRain && !needTrend) || pos === 0) return;
+  if ((!needInt && !needRain && !needTrend) || pos === 0) return;
 
   var first = Math.max(0, pos - 150);
   var prevRows = sheet.getRange(first + 2, 1, pos - first, headers.length).getValues();
@@ -374,6 +401,8 @@ function fillDerived_(sheet, headers, row, key, keys, pos) {
   var prevKey = keys[pos - 1];
   if (!prevKey) return;
   var nowMin = keyMinutes_(key);
+
+  if (needInt) row[cInt] = intervalFromDay_(key, row[cDay], prevKey, prev[cDay]);
 
   if (needRain && nowMin - keyMinutes_(prevKey) <= 24 * 60) {
     var rain = cInt >= 0 ? num_(row[cInt]) : 0;
@@ -450,6 +479,79 @@ function archiveCurrentYear(ss, year) {
 // ---------------------------------------------------------------------------------------
 // Funciones manuales
 // ---------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------
+// Aviso por correo cuando la estación deja de enviar datos
+// ---------------------------------------------------------------------------------------
+
+var ALERT_AFTER_MINUTES = 60;
+var ALERT_CHECK_EVERY_MINUTES = 30;
+
+/**
+ * Ejecutar UNA vez desde el editor: programa revisarEstacion() cada 30 min y la corre de inmediato.
+ * Google pedirá permiso para enviar correos y ejecutar tareas programadas.
+ */
+function activarAvisos() {
+  desactivarAvisos();
+  ScriptApp.newTrigger("revisarEstacion").timeBased().everyMinutes(ALERT_CHECK_EVERY_MINUTES).create();
+  Logger.log("Avisos activados: se revisa cada " + ALERT_CHECK_EVERY_MINUTES + " min; correo a " +
+             Session.getEffectiveUser().getEmail() + " tras " + ALERT_AFTER_MINUTES + " min sin datos.");
+  revisarEstacion();
+}
+
+function desactivarAvisos() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === "revisarEstacion") ScriptApp.deleteTrigger(t);
+  });
+}
+
+/**
+ * Manda un correo si el último registro tiene más de ALERT_AFTER_MINUTES, y otro cuando vuelven
+ * los datos. Solo avisa una vez por corte (el estado se guarda en las propiedades del script).
+ */
+function revisarEstacion() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone();
+  var sheet = getMainSheet_(ss);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  // Fecha más reciente de las últimas filas (la hoja está ordenada; se ignoran celdas no válidas)
+  var n = Math.min(30, lastRow - 1);
+  var lastKey = null;
+  sheet.getRange(lastRow - n + 1, 1, n, 1).getValues().forEach(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (k && Number(k.substring(0, 4)) >= MIN_VALID_YEAR && (!lastKey || k > lastKey)) lastKey = k;
+  });
+  if (!lastKey) return;
+
+  var nowKey = Utilities.formatDate(new Date(), tz, KEY_FORMAT);
+  var silent = Math.round(keyMinutes_(nowKey) - keyMinutes_(lastKey));
+  var props = PropertiesService.getScriptProperties();
+  var alertedSince = props.getProperty("ALERTA_SIN_DATOS_DESDE");
+  var to = Session.getEffectiveUser().getEmail();
+  var url = ss.getUrl();
+
+  if (silent >= ALERT_AFTER_MINUTES && !alertedSince) {
+    MailApp.sendEmail(to, "Estación El Gancho: sin datos desde las " + lastKey.substring(11, 16),
+      "La estación no envía datos a la planilla desde " + lastKey + " (hace " + silent + " min).\n\n" +
+      "Causas probables: se cortó internet en la casa, la estación está desenchufada, o se apagó el router.\n" +
+      "No hace falta hacer nada con los datos: al volver la conexión, la estación recupera sola lo que " +
+      "falte desde la consola Davis (hasta 7 días).\n\n" +
+      "Recibirás otro correo cuando vuelvan los datos.\n\nPlanilla: " + url);
+    props.setProperty("ALERTA_SIN_DATOS_DESDE", lastKey);
+    Logger.log("Aviso enviado: sin datos desde " + lastKey);
+  } else if (silent < ALERT_AFTER_MINUTES && alertedSince) {
+    MailApp.sendEmail(to, "Estación El Gancho: volvieron los datos",
+      "La estación volvió a enviar datos. Último registro: " + lastKey + ".\n" +
+      "Estuvo sin enviar desde " + alertedSince + ". Los registros de ese tramo se recuperan solos " +
+      "desde la consola en los próximos minutos.\n\nPlanilla: " + url);
+    props.deleteProperty("ALERTA_SIN_DATOS_DESDE");
+    Logger.log("Aviso de vuelta enviado; último registro " + lastKey);
+  } else {
+    Logger.log("Último registro " + lastKey + " (hace " + silent + " min)" + (alertedSince ? "; aviso ya enviado" : ""));
+  }
+}
 
 /**
  * Función para ordenar manualmente la hoja por Fecha / Hora ascendente

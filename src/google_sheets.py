@@ -56,7 +56,7 @@ def upload_to_google_sheets(script_url, data, timeout=12):
         "windgustdir_10m": data.get("windgustdir_10m"),
         "pressure_hpa": data.get("pressure_hpa"),
         "barometer_trend": data.get("barometer_trend") or "",
-        "rain_interval_mm": data.get("rain_interval_mm") if data.get("rain_interval_mm") is not None else 0.0,
+        "rain_interval_mm": data.get("rain_interval_mm"),
         "rain_rate_mm_per_hr": data.get("rain_rate_mm_per_hr") if data.get("rain_rate_mm_per_hr") is not None else 0.0,
         # Rain totals stay empty when unknown (archive records): the Apps Script continues them
         "rain_day_mm": data.get("rain_day_mm"),
