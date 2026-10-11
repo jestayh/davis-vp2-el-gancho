@@ -1,12 +1,12 @@
 {
-  "version": "1.0.5",
+  "version": "1.0.6",
   "date": "2026-10-11",
-  "description": "OTA por HTTP/1.0 y Worker HTTPS al final",
+  "description": "Sin hora valida no registra; recupera cortes desde la consola",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "82dc85bcb0795e36cc6d871b73edbfbed2619c63df1c89cd8506c09f6fbba36d"
+      "sha256": "9a47672e999d9b2b2657777c5a22983b83951fa14299e4092504f4ead141609a"
     },
     {
       "remote": "src/display.mpy",
@@ -16,22 +16,22 @@
     {
       "remote": "src/davis_reader.mpy",
       "local": "src/davis_reader.mpy",
-      "sha256": "860ce1bdf215620fc0c63e32d12887c43940df6030df6fe38fc3798873e60224"
+      "sha256": "463245cc304d0d146a1a54dc9b0db132f139e78f59e0a2f7bd5e39f520452752"
     },
     {
       "remote": "src/data_logger.mpy",
       "local": "src/data_logger.mpy",
-      "sha256": "d76dff32922b6506172572798e3810d99c7f9a6d0ae43353ecb6825e858f3136"
+      "sha256": "fab75c28040993ac143ceb7d891551116bdb3aee9382851ed5ef1caeb1bb13a8"
     },
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "84804e10706dd1d9d167ba552a006646068c03b271dc7ec581f80711714ddb1c"
+      "sha256": "8245ba4a444e78afc67f11c31fe311dfb1ca39aea9a6617982ae3b83de6e70e4"
     },
     {
       "remote": "src/history_recovery.mpy",
       "local": "src/history_recovery.mpy",
-      "sha256": "9fbedea2e7472dddcc11fc52db11b7566f8d93ada3d80c418700c538ffde0b93"
+      "sha256": "2cf151de2f1550cfdde16e5787ed5ce0d4906a025d5e633ea5114d248effdbea"
     },
     {
       "remote": "src/ota_updater.mpy",
