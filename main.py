@@ -20,9 +20,12 @@ from config import (
     GOOGLE_APPS_SCRIPT_URL,
     STATUS_LED_PIN, ENABLE_STATUS_LED, STATUS_LED_MODE
 )
-from src.davis_reader import query_station, sync_console_time, log, format_timestamp_local, format_timestamp_utc
+from src.davis_reader import (
+    query_station, sync_console_time, log, format_timestamp_local, format_timestamp_utc,
+    clock_is_valid, sync_ntp
+)
 from src.weather_underground import upload
-from src.data_logger import log_reading_csv, DailyStats
+from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailyStats
 from src.display import WeatherDisplay
 from src.google_sheets import upload_to_google_sheets
 import src.google_sheets as gsheets
@@ -38,6 +41,11 @@ OTA_CHECK_INTERVAL_SECONDS = getattr(_config, "OTA_CHECK_INTERVAL_SECONDS", 8640
 OTA_PROXY_HOST = getattr(_config, "OTA_PROXY_HOST", "davis-ota-proxy.estayh-jose.workers.dev")
 # Minimum gap between OTA checks triggered by the version announced by the Sheets proxy
 OTA_HINT_MIN_INTERVAL_SECONDS = 3600
+# Without a valid clock nothing is logged; NTP is retried this often (and refreshed daily once valid)
+NTP_RETRY_SECONDS = 300
+NTP_RESYNC_SECONDS = 86400
+# Attempts to recover a gap from the console archive before giving it up
+GAP_RECOVERY_MAX_FAILURES = 6
 
 IS_ESP32 = sys.platform == "esp32"
 _led_p = STATUS_LED_PIN if globals().get("ENABLE_STATUS_LED", True) else None
@@ -64,13 +72,8 @@ def connect_wifi_if_needed(show_display=False):
                 except Exception:
                     active_ssid = WIFI_SSID
                 display.show_wifi_status(active_ssid, ip_info[0])
-            if time.time() < 1000000000:
-                try:
-                    import ntptime
-                    ntptime.settime()
-                    log("NTP Time synchronized successfully!")
-                except Exception:
-                    pass
+            if not clock_is_valid():
+                sync_ntp()
             return
 
         target_ssid = WIFI_SSID
@@ -147,13 +150,8 @@ def connect_wifi_if_needed(show_display=False):
                 active_ssid = target_ssid
             if show_display:
                 display.show_wifi_status(active_ssid, ip_info[0])
-            # Sync real-time clock via NTP on ESP32
-            try:
-                import ntptime
-                ntptime.settime()
-                log("NTP Time synchronized successfully!")
-            except Exception as ntp_err:
-                log("[WARNING] NTP sync failed (using internal clock): {}".format(ntp_err))
+            # Real-time clock via NTP (fails while the router has no internet; retried in the main loop)
+            sync_ntp()
         else:
             log("[WARNING] Could not connect to WiFi within timeout.")
     except Exception as e:
@@ -218,6 +216,68 @@ def run_ota_check():
         gc.collect()
 
 
+def read_reset_cause():
+    """Why the ESP32 started (power-up after unplugging vs. a crash/watchdog), or None on PC"""
+    if not IS_ESP32:
+        return None
+    try:
+        import machine
+        cause = machine.reset_cause()
+        names = (
+            ("PWRON_RESET", "Encendido"),
+            ("HARD_RESET", "Reset hardware"),
+            ("WDT_RESET", "Watchdog"),
+            ("DEEPSLEEP_RESET", "Despertar"),
+            ("SOFT_RESET", "Reinicio software"),
+        )
+        for attr, name in names:
+            if cause == getattr(machine, attr, None):
+                return name
+        return "Causa {}".format(cause)
+    except Exception:
+        return None
+
+
+def _with_history_module(fn):
+    """Load src.history_recovery only while needed (keeps the main loop's RAM free)"""
+    try:
+        import src.history_recovery as hr
+        return fn(hr)
+    finally:
+        try:
+            if "src.history_recovery" in sys.modules:
+                del sys.modules["src.history_recovery"]
+        except Exception:
+            pass
+        if IS_ESP32:
+            import gc
+            gc.collect()
+
+
+def run_gap_recovery(until_tuple):
+    """Upload what the console archive holds between the last uploaded record and until_tuple"""
+    try:
+        return _with_history_module(lambda hr: hr.recover_gap(until_tuple, display))
+    except Exception as e:
+        log("[HISTORICO] Error: {}".format(e))
+        return False, False
+
+
+def console_backfill_pending():
+    try:
+        return _with_history_module(lambda hr: hr.console_backfill_pending())
+    except Exception:
+        return False
+
+
+def run_console_backfill():
+    try:
+        return _with_history_module(lambda hr: hr.run_console_backfill(display))
+    except Exception as e:
+        log("[RESPALDO] Error: {}".format(e))
+        return False
+
+
 def main(max_cycles=None):
     if IS_ESP32:
         time.sleep(2)
@@ -248,22 +308,13 @@ def main(max_cycles=None):
     # Make sure the console clock matches local time before reading its archive
     next_clock_check = time.time() + run_console_clock_sync()
 
-    # Check and backfill historical data if any gap occurred
-    if ENABLE_DMPAFT_RECOVERY:
-        try:
-            import src.history_recovery as hr
-            hr.check_and_recover_history(display)
-        except Exception as e:
-            log("[HISTORICO] Error: {}".format(e))
-        finally:
-            try:
-                if "src.history_recovery" in sys.modules:
-                    del sys.modules["src.history_recovery"]
-            except Exception:
-                pass
-        if IS_ESP32:
-            import gc
-            gc.collect()
+    # Gaps since the last uploaded record (power cut, outage, reboot) are filled from the console
+    # archive right after the first successful upload, once internet and the clock are confirmed
+    reset_cause = read_reset_cause()
+    if reset_cause:
+        log("Causa del arranque: {}".format(reset_cause))
+    if not clock_is_valid():
+        log("[RELOJ] Sin hora valida (NTP sin internet): no se registrara nada hasta sincronizar")
 
     # Initial Davis console query to seed weather data
     if display and display.has_oled:
@@ -288,18 +339,38 @@ def main(max_cycles=None):
         }
 
     stats = DailyStats()
-    pending_drive_records = []
     last_wu_upload_time = 0
     last_logged_slot = int(time.time() // CSV_LOG_INTERVAL_SECONDS)
     cycle = 0
     slot_temp_hi = None
     slot_temp_low = None
     last_day_rain_seen = None
+    ntp_retry_cycles = max(1, NTP_RETRY_SECONDS // CARD_ROTATION_SECONDS)
+    ntp_resync_cycles = max(1, NTP_RESYNC_SECONDS // CARD_ROTATION_SECONDS)
+    check_gap = True          # at boot and after any failed upload
+    gap_until = None          # first record uploaded after the gap (exclusive end of the recovery)
+    gap_failures = 0
+    backfill_pending = None   # unknown until the first successful upload
 
     try:
         while max_cycles is None or cycle < max_cycles:
-            cycle_start = time.time()
             cycle += 1
+
+            # NTP: retried every few minutes while the clock is invalid, refreshed daily afterwards
+            if IS_ESP32:
+                clock_was_valid = clock_is_valid()
+                retry_ntp = cycle % (ntp_resync_cycles if clock_was_valid else ntp_retry_cycles) == 0
+                if retry_ntp and sync_ntp():
+                    # The clock may have jumped (from 2000 to today): rebase the schedules on it
+                    new_slot = int(time.time() // CSV_LOG_INTERVAL_SECONDS)
+                    if not clock_was_valid or new_slot < last_logged_slot:
+                        last_logged_slot = new_slot - 1
+                        last_wu_upload_time = 0
+                    if not clock_was_valid:
+                        next_clock_check = 0
+                        check_gap = True
+
+            cycle_start = time.time()
             current_time = time.time()
 
             try:
@@ -354,7 +425,13 @@ def main(max_cycles=None):
                             ota_confirmed = True
 
                 # 3. Synchronized CSV & Google Drive log (every CSV_LOG_INTERVAL_SECONDS)
-                if drive_due:
+                if drive_due and not clock_is_valid():
+                    # A 1999/2000 date would be worthless: skip it, the console archive fills the gap later
+                    log("[RELOJ] Sin hora valida: registro omitido (se recuperara desde la consola)")
+                    last_logged_slot = current_slot
+                    check_gap = True
+                    gap_until = None
+                elif drive_due:
                     aligned_utc_secs = current_slot * CSV_LOG_INTERVAL_SECONDS
                     record_data = dict(data)
                     record_data["timestamp"] = format_timestamp_local(aligned_utc_secs)
@@ -374,11 +451,16 @@ def main(max_cycles=None):
                         CSV_LOG_INTERVAL_SECONDS, record_data["timestamp"], record_data["timestamp_utc"]
                     ))
 
+                    if reset_cause:
+                        record_data["reset_cause"] = reset_cause
+
                     # Local CSV is always appended immediately (never lost)
                     log_reading_csv(CSV_FILEPATH, record_data, uploaded=False)
 
                     # Upload to Google Sheets / Drive (via ultra-fast Cloudflare Worker proxy)
-                    if GOOGLE_APPS_SCRIPT_URL:
+                    if not GOOGLE_APPS_SCRIPT_URL:
+                        update_last_sync_timestamp(record_data["timestamp"])
+                    else:
                         if IS_ESP32:
                             try:
                                 import gc
@@ -401,28 +483,32 @@ def main(max_cycles=None):
                             display.show_sheets_success(record_data.get("timestamp"))
                             display.sheets_success_pulse()
                             time.sleep(3.0)
+                            reset_cause = None
 
-                            # Flush backlog from previous internet outage
-                            if pending_drive_records:
-                                log("[DRIVE] Internet activo. Subiendo {} registros pendientes por corte...".format(len(pending_drive_records)))
-                                while pending_drive_records:
-                                    p_rec = pending_drive_records[0]
-                                    p_ok = False
-                                    time.sleep(1.0)
-                                    if IS_ESP32:
-                                        import gc
-                                        gc.collect()
-                                    try:
-                                        p_ok = upload_to_google_sheets(GOOGLE_APPS_SCRIPT_URL, p_rec)
-                                    except Exception:
-                                        p_ok = False
-                                    if p_ok:
-                                        display.sheets_success_pulse()
-                                        pending_drive_records.pop(0)
-                                    else:
-                                        break
-                                if not pending_drive_records:
-                                    log("[DRIVE] Todos los registros pendientes fueron sincronizados a Google Sheets!")
+                            # Fill any gap before this record from the console archive (it holds ~17 days),
+                            # so an outage or power cut leaves no hole in the sheet
+                            if check_gap:
+                                if gap_until is None:
+                                    ts = record_data["timestamp"]
+                                    gap_until = (int(ts[0:4]), int(ts[5:7]), int(ts[8:10]), int(ts[11:13]), int(ts[14:16]))
+                                gap_done, gap_progress = run_gap_recovery(gap_until)
+                                if not gap_done and not gap_progress:
+                                    gap_failures += 1
+                                    if gap_failures >= GAP_RECOVERY_MAX_FAILURES:
+                                        log("[HISTORICO] No se pudo recuperar el vacio tras {} intentos; se abandona.".format(gap_failures))
+                                        gap_done = True
+                                if gap_done:
+                                    check_gap = False
+                                    gap_until = None
+                                    gap_failures = 0
+                            if not check_gap:
+                                update_last_sync_timestamp(record_data["timestamp"])
+
+                                # One-time upload of the 2026-10-08 console day to the "Consola" tab
+                                if backfill_pending is None:
+                                    backfill_pending = console_backfill_pending()
+                                if backfill_pending and run_console_backfill():
+                                    backfill_pending = False
 
                             # The Sheets proxy announces the latest published firmware: update without waiting a day
                             fw_hint = gsheets.FW_HINT
@@ -431,10 +517,10 @@ def main(max_cycles=None):
                                 next_hint_ota_check = time.time() + OTA_HINT_MIN_INTERVAL_SECONDS
                                 run_ota_check()
                         else:
-                            # Internet outage: store in memory buffer to re-upload when connection returns
-                            if len(pending_drive_records) < 100:
-                                pending_drive_records.append(record_data)
-                            log("[DRIVE] Sin internet. Registro guardado en local CSV y encolado ({} pendientes)".format(len(pending_drive_records)))
+                            # Internet outage: nothing is queued in RAM; the console archive is the buffer
+                            check_gap = True
+                            gap_until = None
+                            log("[DRIVE] Sin internet. Se recuperara desde la consola cuando vuelva la conexion")
 
                     last_logged_slot = current_slot
 

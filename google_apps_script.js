@@ -1,176 +1,104 @@
 /**
  * Davis WeatherStation "El Gancho" - Webhook Inteligente con Mapeo Dinámico
- * 
+ *
  * Características:
  * 1. Mapeo Dinámico por Encabezado: Lee los títulos de la Fila 1 y coloca cada dato
  *    exactamente debajo de su columna correspondiente, sin importar el orden.
- * 2. Ordenamiento cronológico automático ascendente (más antiguo a más reciente).
- * 3. Auto-archivado anual automático en Google Drive el 1 de enero.
+ * 2. Orden cronológico: cada fila se inserta en su lugar (las recuperadas de la consola
+ *    llegan atrasadas) y una fecha repetida actualiza la fila existente en vez de duplicarla.
+ * 3. Rechaza fechas inválidas (ESP32 sin hora: 1999/2000).
+ * 4. Completa los acumulados de lluvia y la tendencia barométrica que los registros
+ *    recuperados del archivo de la consola no traen.
+ * 5. Auto-archivado anual automático en Google Drive el 1 de enero.
+ *
+ * Funciones para ejecutar a mano desde el editor:
+ * - importarConsola(): rellena el hueco del 08-oct-2026 con la pestaña "Consola".
+ * - repararHoja(): borra filas con fecha inválida y duplicados, y vacía Muestras/Tx erróneos.
+ * - ordenarPorFecha(): reordena toda la hoja.
  */
 
+var MIN_VALID_YEAR = 2025;
+var CONSOLE_SHEET_NAME = "Consola";
+var KEY_FORMAT = "yyyy-MM-dd HH:mm:ss";
+
 function doPost(e) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(25000);
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getActiveSheet();
     var data = JSON.parse(e.postData.contents);
-    
-    // Año de la medición entrante
-    var dateObj = data.timestamp ? new Date(data.timestamp.replace(" ", "T")) : new Date();
-    var incomingYear = dateObj.getFullYear();
-    
-    var props = PropertiesService.getScriptProperties();
-    var lastRecordedYear = props.getProperty("LAST_RECORDED_YEAR");
-    
-    // 1. Si la hoja no tiene encabezados, crearlos
-    var numCols = sheet.getLastColumn();
-    if (numCols === 0 || sheet.getLastRow() === 0) {
-      createHeaders(sheet);
-      numCols = sheet.getLastColumn();
-      props.setProperty("LAST_RECORDED_YEAR", incomingYear.toString());
-      lastRecordedYear = incomingYear.toString();
+
+    // Filas de respaldo de la consola: traen la hora de la consola con prefijo "CONSOLA "
+    var toConsole = data.destino === "consola";
+    var key = normalizeKey_(String(data.timestamp || "").replace(/^CONSOLA\s+/, ""));
+    if (!key || Number(key.substring(0, 4)) < MIN_VALID_YEAR) {
+      return text_("IGNORED: fecha invalida '" + data.timestamp + "'");
     }
-    
-    // 2. Detección de Año Nuevo
-    if (lastRecordedYear && incomingYear > parseInt(lastRecordedYear)) {
-      archiveCurrentYear(ss, lastRecordedYear);
-      props.setProperty("LAST_RECORDED_YEAR", incomingYear.toString());
+
+    var sheet = toConsole ? getConsoleSheet_(ss) : getMainSheet_(ss);
+    if (!toConsole) {
+      handleNewYear_(ss, key);
+      ensureHeader_(sheet, "Reinicio");
     }
-    
-    // 3. MAPEO DINÁMICO: Leer los títulos de la Fila 1 y asignar el dato exacto
-    var headers = sheet.getRange(1, 1, 1, numCols).getValues()[0];
-    var row = [];
-    
-    for (var i = 0; i < headers.length; i++) {
-      var h = headers[i].toString().toLowerCase().trim();
-      var val = "";
-      
-      if (h.indexOf("fecha") !== -1 || h.indexOf("hora") !== -1) {
-        val = data.timestamp || "";
-      } else if (h.indexOf("temp max") !== -1 || h.indexOf("temp máx") !== -1 || h.indexOf("hi temp") !== -1) {
-        val = data.temp_out_hi_c !== undefined && data.temp_out_hi_c !== null ? data.temp_out_hi_c : "";
-      } else if (h.indexOf("temp min") !== -1 || h.indexOf("temp mín") !== -1 || h.indexOf("low temp") !== -1) {
-        val = data.temp_out_low_c !== undefined && data.temp_out_low_c !== null ? data.temp_out_low_c : "";
-      } else if (h.indexOf("frio") !== -1 || h.indexOf("frío") !== -1 || h.indexOf("chill") !== -1) {
-        val = data.wind_chill_c !== undefined && data.wind_chill_c !== null ? data.wind_chill_c : "";
-      } else if (h.indexOf("calor int") !== -1 || h.indexOf("in heat") !== -1) {
-        val = data.in_heat_c !== undefined && data.in_heat_c !== null ? data.in_heat_c : "";
-      } else if (h.indexOf("calor") !== -1 || h.indexOf("heat") !== -1) {
-        val = data.heat_index_c !== undefined && data.heat_index_c !== null ? data.heat_index_c : "";
-      } else if (h.indexOf("thw") !== -1) {
-        val = data.thw_index_c !== undefined && data.thw_index_c !== null ? data.thw_index_c : "";
-      } else if (h.indexOf("rocio int") !== -1 || h.indexOf("rocío int") !== -1 || h.indexOf("in dew") !== -1) {
-        val = data.in_dew_c !== undefined && data.in_dew_c !== null ? data.in_dew_c : "";
-      } else if (h.indexOf("rocio") !== -1 || h.indexOf("rocío") !== -1 || h.indexOf("dew") !== -1) {
-        val = data.dewpoint_c !== undefined && data.dewpoint_c !== null ? data.dewpoint_c : "";
-      } else if (h.indexOf("bulbo") !== -1 || h.indexOf("wet") !== -1) {
-        val = data.wet_bulb_c !== undefined && data.wet_bulb_c !== null ? data.wet_bulb_c : "";
-      } else if (h.indexOf("temp ext") !== -1 || (h.indexOf("temp") !== -1 && h.indexOf("ext") !== -1)) {
-        val = data.temp_out_c !== undefined && data.temp_out_c !== null ? data.temp_out_c : "";
-      } else if (h.indexOf("humedad ext") !== -1 || (h.indexOf("hum") !== -1 && h.indexOf("ext") !== -1)) {
-        val = data.humidity_out !== undefined && data.humidity_out !== null ? data.humidity_out : "";
-      } else if (h.indexOf("viento sost") !== -1 || h.indexOf("2m") !== -1) {
-        val = data.windspdkmh_avg2m !== undefined && data.windspdkmh_avg2m !== null ? data.windspdkmh_avg2m : "";
-      } else if (h.indexOf("viento med") !== -1 || h.indexOf("10m avg") !== -1 || (h.indexOf("10m") !== -1 && h.indexOf("med") !== -1)) {
-        var w10 = (data.wind_speed_10min_avg_kmh !== undefined && data.wind_speed_10min_avg_kmh !== null && data.wind_speed_10min_avg_kmh !== "") ? data.wind_speed_10min_avg_kmh : data.wind_speed_kmh;
-        val = w10 !== undefined && w10 !== null ? w10 : "";
-      } else if (h.indexOf("recorrido") !== -1 || h.indexOf("wind run") !== -1) {
-        val = data.wind_run_km !== undefined && data.wind_run_km !== null ? data.wind_run_km : 0.0;
-      } else if (h.indexOf("dir") !== -1 && (h.indexOf("raf") !== -1 || h.indexOf("ráf") !== -1)) {
-        val = data.windgustdir_10m !== undefined && data.windgustdir_10m !== null ? data.windgustdir_10m : "";
-      } else if (h.indexOf("rafaga") !== -1 || h.indexOf("ráfaga") !== -1 || h.indexOf("gust") !== -1) {
-        val = data.windgustkmh_10m !== undefined && data.windgustkmh_10m !== null ? data.windgustkmh_10m : "";
-      } else if (h.indexOf("dir") !== -1 && h.indexOf("viento") !== -1) {
-        val = data.wind_direction_deg !== undefined && data.wind_direction_deg !== null ? data.wind_direction_deg : "";
-      } else if (h.indexOf("viento actual") !== -1 || h.indexOf("viento") !== -1 || h.indexOf("wind") !== -1) {
-        val = data.wind_speed_kmh !== undefined && data.wind_speed_kmh !== null ? data.wind_speed_kmh : "";
-      } else if (h.indexOf("tendencia") !== -1) {
-        val = data.barometer_trend || "Estable";
-      } else if (h.indexOf("presion") !== -1 || h.indexOf("presión") !== -1 || h.indexOf("baro") !== -1) {
-        val = data.pressure_hpa !== undefined && data.pressure_hpa !== null ? data.pressure_hpa : "";
-      } else if (h.indexOf("lluvia int") !== -1 || h.indexOf("rain int") !== -1) {
-        val = data.rain_interval_mm !== undefined && data.rain_interval_mm !== null ? data.rain_interval_mm : 0.0;
-      } else if (h.indexOf("tasa") !== -1 && h.indexOf("lluvia") !== -1) {
-        val = data.rain_rate_mm_per_hr !== undefined && data.rain_rate_mm_per_hr !== null ? data.rain_rate_mm_per_hr : 0.0;
-      } else if (h.indexOf("tormenta") !== -1) {
-        val = data.storm_rain_mm !== undefined && data.storm_rain_mm !== null ? data.storm_rain_mm : 0.0;
-      } else if (h.indexOf("lluvia") !== -1 && (h.indexOf("mes") !== -1 || h.indexOf("month") !== -1)) {
-        val = data.rain_month_mm !== undefined && data.rain_month_mm !== null ? data.rain_month_mm : 0.0;
-      } else if (h.indexOf("lluvia") !== -1 && (h.indexOf("ano") !== -1 || h.indexOf("año") !== -1 || h.indexOf("year") !== -1)) {
-        val = data.rain_year_mm !== undefined && data.rain_year_mm !== null ? data.rain_year_mm : 0.0;
-      } else if (h.indexOf("lluvia") !== -1 && (h.indexOf("dia") !== -1 || h.indexOf("día") !== -1 || h.indexOf("day") !== -1)) {
-        val = data.rain_day_mm !== undefined && data.rain_day_mm !== null ? data.rain_day_mm : 0.0;
-      } else if (h.indexOf("calef") !== -1 || h.indexOf("heat d-d") !== -1) {
-        val = data.heat_dd !== undefined && data.heat_dd !== null ? data.heat_dd : 0.0;
-      } else if (h.indexOf("enfr") !== -1 || h.indexOf("cool d-d") !== -1) {
-        val = data.cool_dd !== undefined && data.cool_dd !== null ? data.cool_dd : 0.0;
-      } else if (h.indexOf("temp int") !== -1 || (h.indexOf("temp") !== -1 && h.indexOf("int") !== -1)) {
-        val = data.temp_in_c !== undefined && data.temp_in_c !== null ? data.temp_in_c : "";
-      } else if (h.indexOf("humedad int") !== -1 || (h.indexOf("hum") !== -1 && h.indexOf("int") !== -1)) {
-        val = data.humidity_in !== undefined && data.humidity_in !== null ? data.humidity_in : "";
-      } else if (h.indexOf("emc") !== -1) {
-        val = data.in_emc !== undefined && data.in_emc !== null ? data.in_emc : "";
-      } else if (h.indexOf("densidad") !== -1 || h.indexOf("air density") !== -1) {
-        val = data.in_air_density !== undefined && data.in_air_density !== null ? data.in_air_density : "";
-      } else if (h.indexOf("muestras") !== -1 || h.indexOf("wind samp") !== -1) {
-        val = data.wind_samples !== undefined && data.wind_samples !== null ? data.wind_samples : 225;
-      } else if (h.indexOf("tx") !== -1) {
-        val = data.wind_tx !== undefined && data.wind_tx !== null ? data.wind_tx : 1;
-      } else if (h.indexOf("recept") !== -1 || h.indexOf("recepcion") !== -1 || h.indexOf("recepción") !== -1) {
-        val = data.iss_recept !== undefined && data.iss_recept !== null ? data.iss_recept : 100.0;
-      } else if (h.indexOf("intervalo") !== -1 || h.indexOf("arc int") !== -1 || h.indexOf("arc. int") !== -1) {
-        val = data.arc_int !== undefined && data.arc_int !== null ? data.arc_int : 10;
-      } else if (h.indexOf("consola") !== -1 || (h.indexOf("bat") !== -1 && h.indexOf("v") !== -1)) {
-        val = data.console_battery_v !== undefined && data.console_battery_v !== null && data.console_battery_v !== "" ? data.console_battery_v : "";
-      } else if (h.indexOf("transmisor") !== -1 || h.indexOf("iss") !== -1) {
-        val = data.tx_battery_status === 0 ? "OK" : (data.tx_battery_status === 1 ? "Baja" : (data.tx_battery_status ? data.tx_battery_status : ""));
-      } else if (h.indexOf("solar") !== -1 || h.indexOf("radiacion") !== -1 || h.indexOf("radiación") !== -1) {
-        val = data.solar_radiation_wm2 !== undefined && data.solar_radiation_wm2 !== null ? data.solar_radiation_wm2 : "";
-      } else if (h.indexOf("uv") !== -1) {
-        val = data.uv_index !== undefined && data.uv_index !== null ? data.uv_index : "";
-      }
-      row.push(val);
-    }
-    
-    // 4. PREVENCIÓN DE DUPLICADOS: Si la fecha/hora ya existe, actualizarla en lugar de duplicar
-    var targetTimestamp = (data.timestamp || "").trim();
-    var lastRow = sheet.getLastRow();
-    var existingRowIndex = -1;
-    
-    if (lastRow > 1 && targetTimestamp) {
-      // Buscar en los últimos 200 registros por rendimiento
-      var startSearchRow = Math.max(2, lastRow - 200);
-      var countSearch = lastRow - startSearchRow + 1;
-      var timestamps = sheet.getRange(startSearchRow, 1, countSearch, 1).getValues();
-      for (var r = 0; r < timestamps.length; r++) {
-        var tStr = timestamps[r][0] ? timestamps[r][0].toString().trim() : "";
-        if (tStr === targetTimestamp) {
-          existingRowIndex = startSearchRow + r;
-          break;
-        }
-      }
-    }
-    
-    if (existingRowIndex !== -1) {
-      sheet.getRange(existingRowIndex, 1, 1, row.length).setValues([row]);
-    } else {
-      sheet.appendRow(row);
-    }
-    
-    // Auto-ordenamiento cronológico ascendente (Fecha / Hora en Columna 1)
-    var updatedLastRow = sheet.getLastRow();
-    if (updatedLastRow > 2) {
-      sheet.getRange(2, 1, updatedLastRow - 1, numCols).sort({column: 1, ascending: true});
-    }
-    
-    return ContentService.createTextOutput("SUCCESS").setMimeType(ContentService.MimeType.TEXT);
+
+    var headers = getHeaders_(sheet);
+    var row = buildRow_(headers, data, key);
+    upsertRow_(sheet, headers, row, key, !toConsole);
+
+    return text_("SUCCESS");
   } catch (err) {
-    return ContentService.createTextOutput("ERROR: " + err.toString()).setMimeType(ContentService.MimeType.TEXT);
+    return text_("ERROR: " + err.toString());
+  } finally {
+    lock.releaseLock();
   }
+}
+
+function text_(msg) {
+  return ContentService.createTextOutput(msg).setMimeType(ContentService.MimeType.TEXT);
+}
+
+// ---------------------------------------------------------------------------------------
+// Hojas y encabezados
+// ---------------------------------------------------------------------------------------
+
+function getMainSheet_(ss) {
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName() !== CONSOLE_SHEET_NAME) return sheets[i];
+  }
+  return sheets[0];
+}
+
+function getConsoleSheet_(ss) {
+  var sheet = ss.getSheetByName(CONSOLE_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONSOLE_SHEET_NAME, ss.getSheets().length);
+    createHeaders(sheet);
+  }
+  return sheet;
+}
+
+function getHeaders_(sheet) {
+  var numCols = sheet.getLastColumn();
+  if (numCols === 0 || sheet.getLastRow() === 0) {
+    createHeaders(sheet);
+    numCols = sheet.getLastColumn();
+  }
+  return sheet.getRange(1, 1, 1, numCols).getValues()[0];
+}
+
+function ensureHeader_(sheet, name) {
+  var headers = getHeaders_(sheet);
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i]).toLowerCase().trim() === name.toLowerCase()) return;
+  }
+  var cell = sheet.getRange(1, headers.length + 1);
+  cell.setValue(name).setFontWeight("bold").setBackground("#202124").setFontColor("#FFFFFF");
 }
 
 function createHeaders(sheet) {
   if (!sheet) {
-    sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    sheet = getMainSheet_(SpreadsheetApp.getActiveSpreadsheet());
   }
   var headers = [
     "Fecha / Hora",
@@ -213,11 +141,297 @@ function createHeaders(sheet) {
     "Batería Consola (V)",
     "Batería Transmisor",
     "Radiación Solar (W/m²)",
-    "Índice UV"
+    "Índice UV",
+    "Reinicio"
   ];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#202124").setFontColor("#FFFFFF");
   sheet.setFrozenRows(1);
+}
+
+/** Índice (0-based) de la primera columna cuyo encabezado contiene todos los fragmentos */
+function colIndex_(headers, fragments) {
+  for (var i = 0; i < headers.length; i++) {
+    var h = String(headers[i]).toLowerCase();
+    var ok = true;
+    for (var j = 0; j < fragments.length; j++) {
+      if (h.indexOf(fragments[j]) === -1) { ok = false; break; }
+    }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+// ---------------------------------------------------------------------------------------
+// Mapeo de datos a columnas
+// ---------------------------------------------------------------------------------------
+
+function v_(value, fallback) {
+  return value !== undefined && value !== null && value !== "" ? value : fallback;
+}
+
+function buildRow_(headers, data, key) {
+  var row = [];
+  for (var i = 0; i < headers.length; i++) {
+    var h = headers[i].toString().toLowerCase().trim();
+    var val = "";
+
+    if (h.indexOf("fecha") !== -1 || h.indexOf("hora") !== -1) {
+      val = key;
+      // Antes que las reglas genéricas de "viento": sus encabezados también contienen esa palabra
+    } else if (h.indexOf("muestras") !== -1 || h.indexOf("wind samp") !== -1) {
+      val = v_(data.wind_samples, "");
+    } else if (h.indexOf("tx") !== -1 && h.indexOf("viento") !== -1) {
+      val = v_(data.wind_tx, "");
+    } else if (h.indexOf("reinicio") !== -1) {
+      val = v_(data.reset_cause, "");
+    } else if (h.indexOf("temp max") !== -1 || h.indexOf("temp máx") !== -1 || h.indexOf("hi temp") !== -1) {
+      val = v_(data.temp_out_hi_c, "");
+    } else if (h.indexOf("temp min") !== -1 || h.indexOf("temp mín") !== -1 || h.indexOf("low temp") !== -1) {
+      val = v_(data.temp_out_low_c, "");
+    } else if (h.indexOf("frio") !== -1 || h.indexOf("frío") !== -1 || h.indexOf("chill") !== -1) {
+      val = v_(data.wind_chill_c, "");
+    } else if (h.indexOf("calor int") !== -1 || h.indexOf("in heat") !== -1) {
+      val = v_(data.in_heat_c, "");
+    } else if (h.indexOf("calor") !== -1 || h.indexOf("heat") !== -1) {
+      val = v_(data.heat_index_c, "");
+    } else if (h.indexOf("thw") !== -1) {
+      val = v_(data.thw_index_c, "");
+    } else if (h.indexOf("rocio int") !== -1 || h.indexOf("rocío int") !== -1 || h.indexOf("in dew") !== -1) {
+      val = v_(data.in_dew_c, "");
+    } else if (h.indexOf("rocio") !== -1 || h.indexOf("rocío") !== -1 || h.indexOf("dew") !== -1) {
+      val = v_(data.dewpoint_c, "");
+    } else if (h.indexOf("bulbo") !== -1 || h.indexOf("wet") !== -1) {
+      val = v_(data.wet_bulb_c, "");
+    } else if (h.indexOf("temp ext") !== -1 || (h.indexOf("temp") !== -1 && h.indexOf("ext") !== -1)) {
+      val = v_(data.temp_out_c, "");
+    } else if (h.indexOf("humedad ext") !== -1 || (h.indexOf("hum") !== -1 && h.indexOf("ext") !== -1)) {
+      val = v_(data.humidity_out, "");
+    } else if (h.indexOf("viento sost") !== -1 || h.indexOf("2m") !== -1) {
+      val = v_(data.windspdkmh_avg2m, "");
+    } else if (h.indexOf("viento med") !== -1 || h.indexOf("10m avg") !== -1 || (h.indexOf("10m") !== -1 && h.indexOf("med") !== -1)) {
+      val = v_(data.wind_speed_10min_avg_kmh, v_(data.wind_speed_kmh, ""));
+    } else if (h.indexOf("recorrido") !== -1 || h.indexOf("wind run") !== -1) {
+      val = v_(data.wind_run_km, 0.0);
+    } else if (h.indexOf("dir") !== -1 && (h.indexOf("raf") !== -1 || h.indexOf("ráf") !== -1)) {
+      val = v_(data.windgustdir_10m, "");
+    } else if (h.indexOf("rafaga") !== -1 || h.indexOf("ráfaga") !== -1 || h.indexOf("gust") !== -1) {
+      val = v_(data.windgustkmh_10m, "");
+    } else if (h.indexOf("dir") !== -1 && h.indexOf("viento") !== -1) {
+      val = v_(data.wind_direction_deg, "");
+    } else if (h.indexOf("viento actual") !== -1 || h.indexOf("viento") !== -1 || h.indexOf("wind") !== -1) {
+      val = v_(data.wind_speed_kmh, "");
+    } else if (h.indexOf("tendencia") !== -1) {
+      val = v_(data.barometer_trend, "");
+    } else if (h.indexOf("presion") !== -1 || h.indexOf("presión") !== -1 || h.indexOf("baro") !== -1) {
+      val = v_(data.pressure_hpa, "");
+    } else if (h.indexOf("lluvia int") !== -1 || h.indexOf("rain int") !== -1) {
+      val = v_(data.rain_interval_mm, 0.0);
+    } else if (h.indexOf("tasa") !== -1 && h.indexOf("lluvia") !== -1) {
+      val = v_(data.rain_rate_mm_per_hr, 0.0);
+      // Acumulados: vacíos si no vienen (registros de archivo), se completan en fillDerived_
+    } else if (h.indexOf("tormenta") !== -1) {
+      val = v_(data.storm_rain_mm, "");
+    } else if (h.indexOf("lluvia") !== -1 && (h.indexOf("mes") !== -1 || h.indexOf("month") !== -1)) {
+      val = v_(data.rain_month_mm, "");
+    } else if (h.indexOf("lluvia") !== -1 && (h.indexOf("ano") !== -1 || h.indexOf("año") !== -1 || h.indexOf("year") !== -1)) {
+      val = v_(data.rain_year_mm, "");
+    } else if (h.indexOf("lluvia") !== -1 && (h.indexOf("dia") !== -1 || h.indexOf("día") !== -1 || h.indexOf("day") !== -1)) {
+      val = v_(data.rain_day_mm, "");
+    } else if (h.indexOf("calef") !== -1 || h.indexOf("heat d-d") !== -1) {
+      val = v_(data.heat_dd, 0.0);
+    } else if (h.indexOf("enfr") !== -1 || h.indexOf("cool d-d") !== -1) {
+      val = v_(data.cool_dd, 0.0);
+    } else if (h.indexOf("temp int") !== -1 || (h.indexOf("temp") !== -1 && h.indexOf("int") !== -1)) {
+      val = v_(data.temp_in_c, "");
+    } else if (h.indexOf("humedad int") !== -1 || (h.indexOf("hum") !== -1 && h.indexOf("int") !== -1)) {
+      val = v_(data.humidity_in, "");
+    } else if (h.indexOf("emc") !== -1) {
+      val = v_(data.in_emc, "");
+    } else if (h.indexOf("densidad") !== -1 || h.indexOf("air density") !== -1) {
+      val = v_(data.in_air_density, "");
+    } else if (h.indexOf("recept") !== -1 || h.indexOf("recepcion") !== -1 || h.indexOf("recepción") !== -1) {
+      val = v_(data.iss_recept, "");
+    } else if (h.indexOf("intervalo") !== -1 || h.indexOf("arc int") !== -1 || h.indexOf("arc. int") !== -1) {
+      val = v_(data.arc_int, 10);
+    } else if (h.indexOf("consola") !== -1 || (h.indexOf("bat") !== -1 && h.indexOf("v") !== -1)) {
+      val = v_(data.console_battery_v, "");
+    } else if (h.indexOf("transmisor") !== -1 || h.indexOf("iss") !== -1) {
+      val = data.tx_battery_status === 0 ? "OK" : (data.tx_battery_status === 1 ? "Baja" : v_(data.tx_battery_status, ""));
+    } else if (h.indexOf("solar") !== -1 || h.indexOf("radiacion") !== -1 || h.indexOf("radiación") !== -1) {
+      val = v_(data.solar_radiation_wm2, "");
+    } else if (h.indexOf("uv") !== -1) {
+      val = v_(data.uv_index, "");
+    }
+    row.push(val);
+  }
+  return row;
+}
+
+// ---------------------------------------------------------------------------------------
+// Fechas: todas se comparan como texto "yyyy-MM-dd HH:mm:ss" (independiente de zonas horarias)
+// ---------------------------------------------------------------------------------------
+
+function pad2_(n) {
+  return (n < 10 ? "0" : "") + n;
+}
+
+/** Convierte "2026-10-08 9:40" / "2026-10-08T09:40:00" a "2026-10-08 09:40:00"; null si no es fecha */
+function normalizeKey_(s) {
+  var m = String(s).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  return m[1] + "-" + pad2_(+m[2]) + "-" + pad2_(+m[3]) + " " + pad2_(+m[4]) + ":" + m[5] + ":" + pad2_(+(m[6] || 0));
+}
+
+/** Clave de una celda de la columna Fecha (Sheets convierte el texto en fecha) */
+function keyOf_(value, tz) {
+  if (value instanceof Date) return Utilities.formatDate(value, tz, KEY_FORMAT);
+  return value === "" || value === null ? null : normalizeKey_(value);
+}
+
+/** Minutos desde 1970 de una clave (aritmética pura sobre la hora local escrita) */
+function keyMinutes_(key) {
+  return Date.UTC(+key.substring(0, 4), +key.substring(5, 7) - 1, +key.substring(8, 10),
+    +key.substring(11, 13), +key.substring(14, 16)) / 60000;
+}
+
+function shiftKey_(key, minutes) {
+  return Utilities.formatDate(new Date((keyMinutes_(key) + minutes) * 60000), "UTC", KEY_FORMAT);
+}
+
+function readKeys_(sheet, tz) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var vals = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var keys = [];
+  for (var i = 0; i < vals.length; i++) keys.push(keyOf_(vals[i][0], tz));
+  return keys;
+}
+
+// ---------------------------------------------------------------------------------------
+// Inserción ordenada sin duplicados
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Inserta la fila en su lugar cronológico; si la fecha ya existe, la reemplaza.
+ * Con fillMissing completa acumulados de lluvia y tendencia vacíos a partir de las filas previas.
+ */
+function upsertRow_(sheet, headers, row, key, fillMissing) {
+  var tz = sheet.getParent().getSpreadsheetTimeZone();
+  var keys = readKeys_(sheet, tz);
+
+  // Posición: índice de la fila igual, o de la primera posterior (se busca desde el final)
+  var pos = keys.length;
+  var exists = false;
+  for (var i = keys.length - 1; i >= 0; i--) {
+    if (keys[i] === key) { pos = i; exists = true; break; }
+    if (keys[i] !== null && keys[i] < key) { pos = i + 1; break; }
+    if (i === 0) pos = 0;
+  }
+
+  if (fillMissing) fillDerived_(sheet, headers, row, key, keys, pos);
+
+  if (exists) {
+    sheet.getRange(pos + 2, 1, 1, row.length).setValues([row]);
+  } else if (pos >= keys.length) {
+    sheet.appendRow(row);
+  } else {
+    sheet.insertRowBefore(pos + 2);
+    sheet.getRange(pos + 2, 1, 1, row.length).setValues([row]);
+  }
+}
+
+function num_(x) {
+  var n = parseFloat(x);
+  return isNaN(n) ? 0 : n;
+}
+
+function round1_(x) {
+  return Math.round(x * 10) / 10;
+}
+
+/**
+ * Completa Lluvia Día/Tormenta/Mes/Año y Tendencia Baro cuando vienen vacíos, continuando
+ * desde las filas anteriores (hasta 24 h): el día, mes y año se reinician al cambiar de fecha;
+ * la tormenta termina tras 24 h sin lluvia, como en la consola Davis.
+ */
+function fillDerived_(sheet, headers, row, key, keys, pos) {
+  var cInt = colIndex_(headers, ["lluvia int"]);
+  var cDay = colIndex_(headers, ["lluvia d"]);
+  var cStorm = colIndex_(headers, ["tormenta"]);
+  var cMonth = colIndex_(headers, ["lluvia mes"]);
+  var cYear = colIndex_(headers, ["lluvia a"]);
+  var cTrend = colIndex_(headers, ["tendencia"]);
+  var cPres = colIndex_(headers, ["presi"]);
+
+  var needRain = [cDay, cStorm, cMonth, cYear].some(function (c) { return c >= 0 && row[c] === ""; });
+  var needTrend = cTrend >= 0 && row[cTrend] === "" && cPres >= 0 && row[cPres] !== "";
+  if ((!needRain && !needTrend) || pos === 0) return;
+
+  var first = Math.max(0, pos - 150);
+  var prevRows = sheet.getRange(first + 2, 1, pos - first, headers.length).getValues();
+  var prev = prevRows[prevRows.length - 1];
+  var prevKey = keys[pos - 1];
+  if (!prevKey) return;
+  var nowMin = keyMinutes_(key);
+
+  if (needRain && nowMin - keyMinutes_(prevKey) <= 24 * 60) {
+    var rain = cInt >= 0 ? num_(row[cInt]) : 0;
+    if (cDay >= 0 && row[cDay] === "") {
+      row[cDay] = round1_((prevKey.substring(0, 10) === key.substring(0, 10) ? num_(prev[cDay]) : 0) + rain);
+    }
+    if (cMonth >= 0 && row[cMonth] === "") {
+      row[cMonth] = round1_((prevKey.substring(0, 7) === key.substring(0, 7) ? num_(prev[cMonth]) : 0) + rain);
+    }
+    if (cYear >= 0 && row[cYear] === "") {
+      row[cYear] = round1_((prevKey.substring(0, 4) === key.substring(0, 4) ? num_(prev[cYear]) : 0) + rain);
+    }
+    if (cStorm >= 0 && row[cStorm] === "") {
+      var rainedLast24h = rain > 0;
+      for (var i = prevRows.length - 1; i >= 0 && !rainedLast24h; i--) {
+        var k = keys[first + i];
+        if (!k || nowMin - keyMinutes_(k) >= 24 * 60) break;
+        if (num_(prevRows[i][cInt]) > 0) rainedLast24h = true;
+      }
+      row[cStorm] = rainedLast24h ? round1_(num_(prev[cStorm]) + rain) : 0;
+    }
+  }
+
+  if (needTrend) {
+    // Cambio de presión en 3 h, con los umbrales de la consola Davis (0,02 y 0,06 inHg)
+    for (var j = prevRows.length - 1; j >= 0; j--) {
+      var kj = keys[first + j];
+      if (!kj) continue;
+      var age = nowMin - keyMinutes_(kj);
+      if (age > 190) break;
+      if (age >= 170 && prevRows[j][cPres] !== "") {
+        var d = num_(row[cPres]) - num_(prevRows[j][cPres]);
+        row[cTrend] = d <= -2.0 ? "Bajando Rápido" : d <= -0.7 ? "Bajando Lento" :
+          d < 0.7 ? "Estable" : d < 2.0 ? "Subiendo Lento" : "Subiendo Rápido";
+        break;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Archivo anual
+// ---------------------------------------------------------------------------------------
+
+function handleNewYear_(ss, key) {
+  var incomingYear = Number(key.substring(0, 4));
+  var props = PropertiesService.getScriptProperties();
+  var lastRecordedYear = parseInt(props.getProperty("LAST_RECORDED_YEAR"), 10);
+
+  // Un año guardado inválido (p. ej. 1999 por un ESP32 sin hora) no debe disparar el archivado
+  if (isNaN(lastRecordedYear) || lastRecordedYear < MIN_VALID_YEAR) {
+    props.setProperty("LAST_RECORDED_YEAR", String(incomingYear));
+    return;
+  }
+  if (incomingYear > lastRecordedYear) {
+    archiveCurrentYear(ss, String(lastRecordedYear));
+    props.setProperty("LAST_RECORDED_YEAR", String(incomingYear));
+  }
 }
 
 function archiveCurrentYear(ss, year) {
@@ -225,80 +439,189 @@ function archiveCurrentYear(ss, year) {
   var parentFolder = currentFile.getParents().hasNext() ? currentFile.getParents().next() : DriveApp.getRootFolder();
   var archiveName = currentFile.getName().replace(/ \d{4}$/, "") + " - " + year;
   currentFile.makeCopy(archiveName, parentFolder);
-  
-  var sheet = ss.getActiveSheet();
+
+  var sheet = getMainSheet_(ss);
   var lastRow = sheet.getLastRow();
   if (lastRow > 1) {
     sheet.deleteRows(2, lastRow - 1);
   }
 }
 
+// ---------------------------------------------------------------------------------------
+// Funciones manuales
+// ---------------------------------------------------------------------------------------
+
 /**
  * Función para ordenar manualmente la hoja por Fecha / Hora ascendente
  */
 function ordenarPorFecha() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var sheet = getMainSheet_(SpreadsheetApp.getActiveSpreadsheet());
   var lastRow = sheet.getLastRow();
   if (lastRow > 2) {
-    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).sort({column: 1, ascending: true});
+    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).sort({ column: 1, ascending: true });
   }
 }
 
 /**
- * Función inteligente para eliminar filas duplicadas existentes en la hoja:
- * Si hay dos filas para la misma Fecha / Hora (por ejemplo una en vivo y otra de archivo),
- * CONSERVA AUTOMÁTICAMENTE LA MÁS COMPLETA (la que tiene más datos, como Batería y Viento)
- * y elimina la fila incompleta.
+ * Rellena el hueco del 08-oct-2026 con los registros de la pestaña "Consola" (archivo de la
+ * consola Davis, guardado con el reloj de la consola, que iba ~3 h atrasado).
+ *
+ * 1. Prueba desfases de -12 h a +12 h cada 10 min y elige el que mejor hace calzar temperatura,
+ *    humedad y presión de la consola con las filas reales de la hoja principal.
+ * 2. Si el calce no es bueno, se detiene sin tocar nada.
+ * 3. Inserta solo las fechas que faltan en la hoja principal (no reemplaza datos existentes).
+ * Ver el resultado en Ver > Registros de ejecución.
  */
-function eliminarDuplicados() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+function importarConsola() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone();
+  var main = getMainSheet_(ss);
+  var cons = ss.getSheetByName(CONSOLE_SHEET_NAME);
+  if (!cons || cons.getLastRow() < 2) {
+    Logger.log("No hay datos en la pestaña '" + CONSOLE_SHEET_NAME + "' todavía.");
+    return;
+  }
+
+  var mh = getHeaders_(main);
+  var ch = getHeaders_(cons);
+  var mVals = main.getRange(2, 1, main.getLastRow() - 1, mh.length).getValues();
+  var cVals = cons.getRange(2, 1, cons.getLastRow() - 1, ch.length).getValues();
+
+  var mT = colIndex_(mh, ["temp ext"]), mH = colIndex_(mh, ["humedad ext"]), mP = colIndex_(mh, ["presi"]);
+  var cT = colIndex_(ch, ["temp ext"]), cH = colIndex_(ch, ["humedad ext"]), cP = colIndex_(ch, ["presi"]);
+
+  var mainByKey = {};
+  mVals.forEach(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (k && Number(k.substring(0, 4)) >= MIN_VALID_YEAR) mainByKey[k] = r;
+  });
+  var consRows = [];
+  cVals.forEach(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (k && r[cT] !== "") consRows.push({ key: k, row: r });
+  });
+  consRows.sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
+
+  var cands = [];
+  for (var off = -720; off <= 720; off += 10) {
+    var n = 0, err = 0;
+    for (var i = 0; i < consRows.length; i++) {
+      var m = mainByKey[shiftKey_(consRows[i].key, off)];
+      if (!m || m[mT] === "") continue;
+      var c = consRows[i].row;
+      err += Math.abs(num_(m[mT]) - num_(c[cT])) + Math.abs(num_(m[mH]) - num_(c[cH])) / 5 +
+        Math.abs(num_(m[mP]) - num_(c[cP]));
+      n++;
+    }
+    if (n >= 12) cands.push({ off: off, score: err / n, n: n });
+  }
+  if (!cands.length) {
+    Logger.log("No hay suficientes horas en común entre la consola y la hoja para calcular el desfase.");
+    return;
+  }
+  cands.sort(function (a, b) { return a.score - b.score; });
+  var best = cands[0];
+  // Desfases vecinos (±50 min) calzan casi igual porque el tiempo cambia lento: se compara
+  // con el mejor desfase claramente distinto para descartar ambigüedad
+  var second = null;
+  for (var s = 1; s < cands.length; s++) {
+    if (Math.abs(cands[s].off - best.off) >= 60) { second = cands[s]; break; }
+  }
+  Logger.log("Mejor desfase: " + (best.off >= 0 ? "+" : "") + best.off + " min (error medio " +
+    best.score.toFixed(2) + " en " + best.n + " filas comunes)" +
+    (second ? "; siguiente: " + second.off + " min (error " + second.score.toFixed(2) + ")" : ""));
+  if (best.score > 1.0 || (second && second.score < best.score * 1.5)) {
+    Logger.log("El calce no es concluyente: no se modificó la hoja.");
+    return;
+  }
+
+  // Copiar por nombre de columna; acumulados de lluvia y tendencia se recalculan al insertar
+  var map = mh.map(function (h) { return ch.indexOf(h); });
+  var cDay = colIndex_(mh, ["lluvia d"]), cStorm = colIndex_(mh, ["tormenta"]);
+  var cMonth = colIndex_(mh, ["lluvia mes"]), cYear = colIndex_(mh, ["lluvia a"]);
+  var cTrend = colIndex_(mh, ["tendencia"]);
+  var inserted = 0, first = null, last = null;
+  for (var j = 0; j < consRows.length; j++) {
+    var key = shiftKey_(consRows[j].key, best.off);
+    if (mainByKey[key]) continue;
+    var row = map.map(function (ci) { return ci >= 0 ? consRows[j].row[ci] : ""; });
+    row[0] = key;
+    [cDay, cStorm, cMonth, cYear, cTrend].forEach(function (ci) { if (ci >= 0) row[ci] = ""; });
+    upsertRow_(main, mh, row, key, true);
+    mainByKey[key] = row;
+    inserted++;
+    first = first || key;
+    last = key;
+  }
+  Logger.log("Filas insertadas desde la consola: " + inserted + (inserted ? " (" + first + " a " + last + ")" : ""));
+}
+
+/**
+ * Limpieza única de la hoja principal:
+ * - borra filas con fecha inválida (antes de 2025, p. ej. 1999/2000 de un ESP32 sin hora) o no reconocible
+ * - borra duplicados de fecha, conservando la fila más completa
+ * - vacía "Muestras Viento" y "Tx Viento" donde repetían la velocidad del viento (error del mapeo anterior)
+ */
+function repararHoja() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone();
+  var sheet = getMainSheet_(ss);
   var lastRow = sheet.getLastRow();
-  if (lastRow <= 2) return;
-  
-  var numCols = sheet.getLastColumn();
-  var values = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
-  
-  // Agrupar filas por timestamp
-  var groups = {};
+  if (lastRow < 2) return;
+  var headers = getHeaders_(sheet);
+  var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+
+  var toDelete = [];
+  var byKey = {};
   for (var i = 0; i < values.length; i++) {
-    var ts = values[i][0] ? values[i][0].toString().trim() : "";
-    if (!ts) continue;
-    if (!groups[ts]) {
-      groups[ts] = [];
+    var k = keyOf_(values[i][0], tz);
+    if (!k || Number(k.substring(0, 4)) < MIN_VALID_YEAR) {
+      toDelete.push(i + 2);
+      continue;
     }
-    // Calcular cuántos datos válidos (no vacíos) tiene esta fila
-    var score = 0;
-    for (var c = 0; c < numCols; c++) {
-      if (values[i][c] !== "" && values[i][c] !== null && values[i][c] !== undefined) {
-        score++;
+    var score = values[i].filter(function (x) { return x !== "" && x !== null; }).length;
+    if (byKey[k] === undefined) {
+      byKey[k] = { row: i + 2, score: score };
+    } else if (score > byKey[k].score) {
+      toDelete.push(byKey[k].row);
+      byKey[k] = { row: i + 2, score: score };
+    } else {
+      toDelete.push(i + 2);
+    }
+  }
+
+  // Muestras/Tx iguales a Viento Actual = valor mal mapeado (las filas se procesan antes de borrar)
+  var cWind = colIndex_(headers, ["viento actual"]);
+  var cSamp = colIndex_(headers, ["muestras"]);
+  var cTx = colIndex_(headers, ["tx", "viento"]);
+  var blanked = 0;
+  if (cWind >= 0 && cSamp >= 0 && cTx >= 0) {
+    var samp = sheet.getRange(2, cSamp + 1, values.length, 1).getValues();
+    var tx = sheet.getRange(2, cTx + 1, values.length, 1).getValues();
+    for (var r = 0; r < values.length; r++) {
+      var w = values[r][cWind];
+      if (w !== "" && samp[r][0] === w && tx[r][0] === w) {
+        samp[r][0] = "";
+        tx[r][0] = "";
+        blanked++;
       }
     }
-    groups[ts].push({ rowNum: i + 2, score: score });
+    sheet.getRange(2, cSamp + 1, values.length, 1).setValues(samp);
+    sheet.getRange(2, cTx + 1, values.length, 1).setValues(tx);
   }
-  
-  var rowsToDelete = [];
-  for (var key in groups) {
-    if (groups[key].length > 1) {
-      // Ordenar por score descendente: la fila con más columnas llenas queda primera
-      groups[key].sort(function(a, b) { return b.score - a.score; });
-      // Mantener la primera (la más completa) y marcar las demás para eliminar
-      for (var k = 1; k < groups[key].length; k++) {
-        rowsToDelete.push(groups[key][k].rowNum);
-      }
-    }
+
+  toDelete.sort(function (a, b) { return b - a; });
+  for (var d = 0; d < toDelete.length; d++) {
+    sheet.deleteRow(toDelete[d]);
   }
-  
-  // Ordenar de mayor a menor para borrar de abajo hacia arriba sin alterar índices
-  rowsToDelete.sort(function(a, b) { return b - a; });
-  for (var d = 0; d < rowsToDelete.length; d++) {
-    sheet.deleteRow(rowsToDelete[d]);
-  }
-  
-  // Re-ordenar cronológicamente
-  var newLastRow = sheet.getLastRow();
-  if (newLastRow > 2) {
-    sheet.getRange(2, 1, newLastRow - 1, numCols).sort({column: 1, ascending: true});
-  }
+  ordenarPorFecha();
+  Logger.log("Filas borradas (fecha inválida o duplicada): " + toDelete.length +
+    "; filas con Muestras/Tx vaciados: " + blanked);
+}
+
+/** Alias de la versión anterior */
+function eliminarDuplicados() {
+  repararHoja();
 }
 
 /**
@@ -307,15 +630,15 @@ function eliminarDuplicados() {
  * No altera las celdas de batería para permitir identificar registros de archivo.
  */
 function rellenarVientoMedio() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var sheet = getMainSheet_(SpreadsheetApp.getActiveSpreadsheet());
   var lastRow = sheet.getLastRow();
   var numCols = sheet.getLastColumn();
   if (lastRow <= 1) return;
-  
+
   var headers = sheet.getRange(1, 1, 1, numCols).getValues()[0];
   var colVientoActual = -1;
   var colVientoMed10 = -1;
-  
+
   for (var c = 0; c < headers.length; c++) {
     var h = headers[c].toString().toLowerCase();
     if (h.indexOf("viento actual") !== -1 || (h.indexOf("viento") !== -1 && h.indexOf("actual") !== -1)) {
@@ -324,7 +647,7 @@ function rellenarVientoMedio() {
       colVientoMed10 = c + 1;
     }
   }
-  
+
   if (colVientoActual !== -1 && colVientoMed10 !== -1) {
     var rangeActual = sheet.getRange(2, colVientoActual, lastRow - 1, 1).getValues();
     var rangeMed10 = sheet.getRange(2, colVientoMed10, lastRow - 1, 1).getValues();
@@ -340,5 +663,3 @@ function rellenarVientoMedio() {
     }
   }
 }
-
-

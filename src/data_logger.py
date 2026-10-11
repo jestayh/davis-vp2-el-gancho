@@ -106,8 +106,11 @@ LAST_SYNC_FILE = "data/last_sync.txt"
 
 
 def update_last_sync_timestamp(ts_str):
-    """Save lightweight 19-byte timestamp to state file (prevents flash wear-out on ESP32)"""
-    if not ts_str:
+    """
+    Save the timestamp of the last record that reached Google Sheets (19-byte state file,
+    prevents flash wear-out on ESP32). Gap recovery from the console archive starts here.
+    """
+    if not ts_str or str(ts_str)[:4] < "2025":
         return
     try:
         ensure_parent_dir(LAST_SYNC_FILE)
@@ -121,14 +124,14 @@ def get_last_csv_timestamp(filepath):
     """
     Read the last valid timestamp from tiny state file or fallback CSV.
     Returns (year, month, day, hour, minute) tuple or None.
-    Fast and memory-efficient for MicroPython.
+    Fast and memory-efficient for MicroPython. Dates before 2025 (unsynced clock) are ignored.
     """
     # 1. Check tiny 19-byte state file first
     try:
         if file_exists(LAST_SYNC_FILE):
             with open(LAST_SYNC_FILE, "r") as f:
                 ts_str = f.read().strip()
-                if len(ts_str) >= 16:
+                if len(ts_str) >= 16 and ts_str[:4] >= "2025":
                     year = int(ts_str[0:4])
                     month = int(ts_str[5:7])
                     day = int(ts_str[8:10])
@@ -155,7 +158,7 @@ def get_last_csv_timestamp(filepath):
                     continue
                 parts = line.split(",")
                 ts_str = parts[0].strip()
-                if len(ts_str) >= 16:
+                if len(ts_str) >= 16 and ts_str[:4] >= "2025":
                     year = int(ts_str[0:4])
                     month = int(ts_str[5:7])
                     day = int(ts_str[8:10])
@@ -178,11 +181,6 @@ def log_reading_csv(filepath, data, uploaded=False, cycle=None):
         data = uploaded
         uploaded = cycle if cycle is not None else False
         cycle = real_cycle
-
-    # Always maintain the tiny state file for outage recovery
-    ts = data.get("timestamp")
-    if ts:
-        update_last_sync_timestamp(ts)
 
     # On ESP32, avoid heavy CSV writes to prevent flash wear-out and disk saturation
     if IS_ESP32:

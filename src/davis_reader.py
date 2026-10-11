@@ -103,6 +103,26 @@ def format_timestamp_utc(secs=None):
     )
 
 
+def clock_is_valid():
+    """True once the clock holds a real date. After power-up the ESP32 RTC restarts at 2000-01-01
+    and stays there until NTP answers (needs internet, not just WiFi)."""
+    return time.gmtime()[0] >= 2025
+
+
+def sync_ntp():
+    """Set the ESP32 clock from NTP. Returns True when the clock is valid afterwards."""
+    try:
+        import ntptime
+        ntptime.settime()
+    except Exception as e:
+        log("[RELOJ] NTP sin respuesta: {}".format(e))
+        return False
+    if not clock_is_valid():
+        return False
+    log("[RELOJ] Hora sincronizada por NTP: {}".format(format_timestamp_local()))
+    return True
+
+
 def get_iso_timestamp(secs=None):
     """Return local formatted timestamp string: YYYY-MM-DD HH:MM:SS"""
     return format_timestamp_local(secs)
@@ -746,7 +766,7 @@ def sync_console_time(host, port, tolerance_s=30, timeout=4.0):
       "error" no/invalid reply from console, or SETTIME rejected
     diff_seconds is (console - local) before any correction, or None.
     """
-    if time.gmtime()[0] < 2025:
+    if not clock_is_valid():
         log("[RELOJ] Reloj local sin sincronizar por NTP; se omite ajuste de la consola")
         return "skip", None
 

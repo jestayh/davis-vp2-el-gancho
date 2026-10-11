@@ -55,13 +55,14 @@ def upload_to_google_sheets(script_url, data, timeout=12):
         "windgustkmh_10m": data.get("windgustkmh_10m"),
         "windgustdir_10m": data.get("windgustdir_10m"),
         "pressure_hpa": data.get("pressure_hpa"),
-        "barometer_trend": data.get("barometer_trend") or "Estable",
+        "barometer_trend": data.get("barometer_trend") or "",
         "rain_interval_mm": data.get("rain_interval_mm") if data.get("rain_interval_mm") is not None else 0.0,
         "rain_rate_mm_per_hr": data.get("rain_rate_mm_per_hr") if data.get("rain_rate_mm_per_hr") is not None else 0.0,
-        "rain_day_mm": data.get("rain_day_mm") if data.get("rain_day_mm") is not None else 0.0,
-        "storm_rain_mm": data.get("storm_rain_mm") if data.get("storm_rain_mm") is not None else 0.0,
-        "rain_month_mm": data.get("rain_month_mm") if data.get("rain_month_mm") is not None else 0.0,
-        "rain_year_mm": data.get("rain_year_mm") if data.get("rain_year_mm") is not None else 0.0,
+        # Rain totals stay empty when unknown (archive records): the Apps Script continues them
+        "rain_day_mm": data.get("rain_day_mm"),
+        "storm_rain_mm": data.get("storm_rain_mm"),
+        "rain_month_mm": data.get("rain_month_mm"),
+        "rain_year_mm": data.get("rain_year_mm"),
         "heat_dd": data.get("heat_dd") if data.get("heat_dd") is not None else 0.0,
         "cool_dd": data.get("cool_dd") if data.get("cool_dd") is not None else 0.0,
         "temp_in_c": data.get("temp_in_c"),
@@ -79,6 +80,10 @@ def upload_to_google_sheets(script_url, data, timeout=12):
         "solar_radiation_wm2": data.get("solar_radiation_wm2"),
         "uv_index": data.get("uv_index"),
     }
+    # Optional: why the ESP32 last restarted (first row after boot) and target tab ("consola")
+    for key in ("reset_cause", "destino"):
+        if data.get(key):
+            payload[key] = data[key]
 
     try:
         if IS_ESP32:
