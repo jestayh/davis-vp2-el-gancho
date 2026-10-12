@@ -217,5 +217,40 @@ live("2026-10-12 02:40:00", 0.9, 0);
 ctx.revisarEstacion();
 check(mails.length === 2 && mails[1].subject.includes("volvieron"), "correo cuando vuelven los datos");
 
+// ---------- weather alerts (checked by the same 30-min trigger) ----------
+const wx = (ts, extra) => post(Object.assign({ timestamp: ts, temp_out_c: 5, rain_interval_mm: 0, rain_day_mm: 0.9,
+  storm_rain_mm: 0.9, rain_month_mm: 70.9, rain_year_mm: 430.9, rain_rate_mm_per_hr: 0, windgustkmh_10m: 10,
+  console_battery_v: 4.2, tx_battery_status: 0, barometer_trend: "Estable" }, extra));
+const subjects = () => mails.slice(2).map((m) => m.subject);
+wx("2026-10-12 02:50:00", { temp_out_c: 1.5 });
+ctx.FAKE_NOW = "2026-10-12 02:55:00";
+ctx.revisarEstacion();
+check(subjects().length === 1 && subjects()[0].includes("riesgo de helada (1.5 °C"), "riesgo de helada -> " + subjects());
+wx("2026-10-12 03:00:00", { temp_out_c: -0.5, windgustkmh_10m: 56.3, rain_rate_mm_per_hr: 12.2, console_battery_v: 3.4,
+                            tx_battery_status: 1 });
+ctx.FAKE_NOW = "2026-10-12 03:05:00";
+ctx.revisarEstacion();
+const s = subjects();
+check(s.some((x) => x.includes("helada (-0.5 °C a las 03:00)")), "helada");
+check(s.some((x) => x.includes("ráfagas de 56.3 km/h")), "ráfaga fuerte");
+check(s.some((x) => x.includes("lluvia intensa")), "lluvia intensa");
+check(s.some((x) => x.includes("batería de la consola baja (3.4 V)")), "batería de la consola baja");
+check(s.some((x) => x.includes("batería del transmisor baja")), "batería del transmisor baja");
+const count = mails.length;
+wx("2026-10-12 03:10:00", { temp_out_c: -1.2, windgustkmh_10m: 60, rain_rate_mm_per_hr: 15, console_battery_v: 3.3,
+                            tx_battery_status: 1 });
+ctx.FAKE_NOW = "2026-10-12 03:35:00";
+ctx.revisarEstacion();
+check(mails.length === count, "no repite avisos en la misma noche / dia / semana");
+ctx.FAKE_NOW = "2026-10-12 08:00:00";
+wx("2026-10-12 07:50:00", { temp_out_c: 1.0 });
+ctx.revisarEstacion();
+check(mails.length === count, "ya hubo helada esa noche: no avisa riesgo despues");
+wx("2026-10-13 02:00:00", { temp_out_c: -2 });
+ctx.FAKE_NOW = "2026-10-13 02:05:00";
+ctx.revisarEstacion();
+check(mails.slice(count).some((m) => m.subject.includes("helada (-2 °C")), "otra noche: nuevo aviso de helada");
+check(!mails.slice(count).some((m) => m.subject.includes("batería")), "baterías: un aviso por semana");
+
 console.log(failures ? "\n" + failures + " FALLAS" : "\nTODO OK");
 process.exit(failures ? 1 : 0);

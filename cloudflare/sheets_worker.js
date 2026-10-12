@@ -65,8 +65,12 @@ export default {
       if (google.ok && isStored(answer)) {
         return new Response("OK", { status: 200, headers });
       }
-      return new Response("GOOGLE " + google.status + ": " + answer.slice(0, 200), { status: 502, headers });
+      // console.error: shows in red in the Worker's Logs and counts under "Errors"
+      const reason = "GOOGLE " + google.status + ": " + answer.slice(0, 200);
+      console.error("Google no guardo la fila (el ESP32 la recuperara de la consola): " + reason);
+      return new Response(reason, { status: 502, headers });
     } catch (err) {
+      console.error("Sin respuesta de Google (el ESP32 la recuperara de la consola): " + err);
       return new Response("ERR " + err, { status: 502, headers });
     }
   }

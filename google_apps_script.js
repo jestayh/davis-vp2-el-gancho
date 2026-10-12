@@ -13,7 +13,9 @@
  * 6. Pestaña "Estado": un reporte diario de salud del ESP32 (versión, memoria, WiFi, fallas).
  *
  * Funciones para ejecutar a mano desde el editor:
- * - activarAvisos(): correo si la estación pasa 60 min sin enviar datos (y cuando vuelven).
+ * - activarAvisos(): correo si la estación pasa 60 min sin enviar datos (y cuando vuelven), y
+ *   avisos del tiempo: helada / riesgo de helada, ráfagas fuertes, lluvia intensa y baterías bajas
+ *   (umbrales en FROST_C, FROST_WARN_C, GUST_KMH, RAIN_RATE_MMH, RAIN_DAY_MM, CONSOLE_BATTERY_V).
  * - importarConsola(): rellena el hueco del 08-oct-2026 con la pestaña "Consola".
  * - repararHoja(): borra filas con fecha inválida y duplicados, y vacía Muestras/Tx erróneos.
  * - ordenarPorFecha(): reordena toda la hoja.
@@ -640,6 +642,90 @@ function revisarEstacion() {
     Logger.log("Aviso de vuelta enviado; último registro " + lastKey);
   } else {
     Logger.log("Último registro " + lastKey + " (hace " + silent + " min)" + (alertedSince ? "; aviso ya enviado" : ""));
+  }
+
+  revisarClima_(sheet, tz, nowKey, props, to, url);
+}
+
+// ---------------------------------------------------------------------------------------
+// Avisos del tiempo (los revisa revisarEstacion cada 30 min). Umbrales editables:
+// ---------------------------------------------------------------------------------------
+
+var FROST_WARN_C = 2;          // riesgo de helada: temperatura igual o menor
+var FROST_C = 0;               // helada
+var GUST_KMH = 50;             // ráfaga fuerte
+var RAIN_RATE_MMH = 10;        // lluvia intensa (intensidad)
+var RAIN_DAY_MM = 20;          // lluvia intensa (acumulado del día)
+var CONSOLE_BATTERY_V = 3.5;   // batería de la consola baja
+var WEATHER_LOOKBACK_MINUTES = 180;   // solo filas recientes (no avisar por registros recuperados viejos)
+
+/**
+ * Un correo por evento: helada / riesgo de helada una vez por noche, ráfaga y lluvia una vez por
+ * día, baterías una vez por semana mientras sigan bajas. Lo ya avisado se guarda en propiedades.
+ */
+function revisarClima_(sheet, tz, nowKey, props, to, url) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  var headers = getHeaders_(sheet);
+  var n = Math.min(24, lastRow - 1);
+  var rows = sheet.getRange(lastRow - n + 1, 1, n, headers.length).getValues();
+  var col = {
+    temp: colIndex_(headers, ["temp ext"]), gust: colIndex_(headers, ["ráfaga 10m"]),
+    gustDir: colIndex_(headers, ["dir ráfaga"]), rate: colIndex_(headers, ["tasa lluvia"]),
+    day: colIndex_(headers, ["lluvia d"]), batC: colIndex_(headers, ["bater", "consola"]),
+    batTx: colIndex_(headers, ["bater", "transmisor"])
+  };
+  var since = keyMinutes_(nowKey) - WEATHER_LOOKBACK_MINUTES;
+  var minT = null, maxGust = null, maxRate = null, maxDay = null, batC = null, txLow = null;
+  rows.forEach(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (!k || keyMinutes_(k) < since) return;
+    var t = r[col.temp], g = r[col.gust], rate = r[col.rate], day = r[col.day];
+    if (t !== "" && (!minT || t < minT.v)) minT = { v: t, k: k };
+    if (g !== "" && (!maxGust || g > maxGust.v)) maxGust = { v: g, k: k, dir: r[col.gustDir] };
+    if (rate !== "" && (!maxRate || rate > maxRate.v)) maxRate = { v: rate, k: k };
+    if (day !== "" && (!maxDay || day > maxDay.v)) maxDay = { v: day, k: k };
+    if (col.batC >= 0 && r[col.batC] !== "") batC = { v: r[col.batC], k: k };
+    if (col.batTx >= 0 && r[col.batTx] !== "") txLow = { low: r[col.batTx] === "Baja", k: k };
+  });
+
+  function once(prop, period, subject, body) {
+    if (props.getProperty(prop) === period) return;
+    MailApp.sendEmail(to, "Estación El Gancho: " + subject, body + "\n\nPlanilla: " + url);
+    props.setProperty(prop, period);
+    Logger.log("Aviso enviado: " + subject);
+  }
+  function hm(k) { return k.substring(11, 16); }
+  // La noche de una helada se identifica por la fecha de 12 h antes (03:00 del 13 -> noche del 12)
+  function night(k) { return "noche " + shiftKey_(k, -720).substring(0, 10); }
+  function week(k) { return "semana " + shiftKey_(k, -((Math.floor(keyMinutes_(k) / 1440) + 3) % 7) * 1440).substring(0, 10); }
+
+  if (minT && minT.v <= FROST_C) {
+    props.setProperty("AVISO_RIESGO_HELADA", night(minT.k));
+    once("AVISO_HELADA", night(minT.k), "helada (" + minT.v + " °C a las " + hm(minT.k) + ")",
+      "La temperatura bajó a " + minT.v + " °C a las " + hm(minT.k) + " (" + minT.k.substring(0, 10) + ").");
+  } else if (minT && minT.v <= FROST_WARN_C) {
+    once("AVISO_RIESGO_HELADA", night(minT.k), "riesgo de helada (" + minT.v + " °C a las " + hm(minT.k) + ")",
+      "La temperatura bajó a " + minT.v + " °C a las " + hm(minT.k) + ". Si sigue bajando puede helar esta noche.");
+  }
+  if (maxGust && maxGust.v >= GUST_KMH) {
+    once("AVISO_RAFAGA", maxGust.k.substring(0, 10), "ráfagas de " + maxGust.v + " km/h",
+      "Ráfaga de " + maxGust.v + " km/h a las " + hm(maxGust.k) +
+      (maxGust.dir !== "" ? " desde " + maxGust.dir + "°" : "") + ".");
+  }
+  if ((maxRate && maxRate.v >= RAIN_RATE_MMH) || (maxDay && maxDay.v >= RAIN_DAY_MM)) {
+    var ref = maxRate && maxRate.v >= RAIN_RATE_MMH ? maxRate.k : maxDay.k;
+    once("AVISO_LLUVIA", ref.substring(0, 10), "lluvia intensa (" + (maxDay ? maxDay.v : 0) + " mm hoy)",
+      "Intensidad máxima " + (maxRate ? maxRate.v : 0) + " mm/h; acumulado del día " + (maxDay ? maxDay.v : 0) + " mm.");
+  }
+  if (batC && batC.v < CONSOLE_BATTERY_V) {
+    once("AVISO_BATERIA_CONSOLA", week(batC.k), "batería de la consola baja (" + batC.v + " V)",
+      "La batería de la consola Davis marca " + batC.v + " V. Conviene cambiar las pilas en la próxima visita " +
+      "(si se corta la luz, la consola deja de guardar datos).");
+  }
+  if (txLow && txLow.low) {
+    once("AVISO_BATERIA_TX", week(txLow.k), "batería del transmisor baja",
+      "La consola informa batería baja en el transmisor (ISS). Conviene revisarla en la próxima visita.");
   }
 }
 
