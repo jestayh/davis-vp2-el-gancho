@@ -1,12 +1,12 @@
 {
-  "version": "1.0.13",
+  "version": "1.0.14",
   "date": "2026-10-11",
-  "description": "Pantalla: mensaje del pronostico Davis desplazandose en espanol",
+  "description": "Watchdog de hardware: reinicio automatico si el programa se cuelga",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "0b3a1258a027f7ac179cb4e3b9aca1936c844735a6a3b7e5a796946b7567ce8b"
+      "sha256": "aa9f1755dc8c48065b6044ce383c3a2cd883fa2ac900911fd48d130642e4f7df"
     },
     {
       "remote": "src/display.mpy",
@@ -31,12 +31,17 @@
     {
       "remote": "src/history_recovery.mpy",
       "local": "src/history_recovery.mpy",
-      "sha256": "314f2b38e9913e590d5cbd14161f70e3d52a066c02db7bc63d98300d23391b7b"
+      "sha256": "5552b8a9998b6ef6a55c82d5235b332e9ffa6779befb62c6bfbc4b946ac94136"
     },
     {
       "remote": "src/ota_updater.mpy",
       "local": "src/ota_updater.mpy",
-      "sha256": "8a6e5ba34364eb470db3fd9be856ee6d452eb667c5e7100261d00530cf12422d"
+      "sha256": "66503efd6b4cc365ac306a1fe6c54eb8b89eae5fc44c0d2a9d2a706a06344c77"
+    },
+    {
+      "remote": "src/watchdog.mpy",
+      "local": "src/watchdog.mpy",
+      "sha256": "c15b82dd2d5ea9c4d8ea93ab1c016762cba8fd598ee673a8c91031d4aeeb85d1"
     }
   ]
 }
