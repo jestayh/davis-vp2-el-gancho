@@ -245,6 +245,8 @@ class WeatherDisplay:
         self.led_mode = led_mode
         self.led_until = 0
         self.card_index = 0
+        self.errors = 0          # cards that failed to draw (shown on screen, see show_weather)
+        self.last_error = None
         self.last_card_lines = None
         self.last_card_title = None
         self.wu_tag = "WU: --"
@@ -519,13 +521,10 @@ class WeatherDisplay:
         self.iss_recept = pct
 
     def _next_card(self, data):
-        """Next card id in _ROTATION; the rain card is skipped while it is not raining, and the
-        big temperature is never shown twice in a row"""
+        """Next card id in _ROTATION; the big temperature is never shown twice in a row"""
         for _ in range(len(_ROTATION)):
             card = _ROTATION[self.card_index]
             self.card_index = (self.card_index + 1) % len(_ROTATION)
-            if card == "lluvia" and not (data.get("rain_rate_mm_per_hr") or data.get("rain_day_mm")):
-                continue
             if card == "ahora" and self.last_card_title in ("AHORA", "PRONOST."):
                 continue
             return card
@@ -561,8 +560,12 @@ class WeatherDisplay:
         h_out = data.get("humidity_out")
         w_spd = data.get("wind_speed_kmh")
         w_dir = data.get("wind_direction_deg")
+        r_day = float(data.get("rain_day_mm") or 0)
         bottom = "{}%".format(h_out) if h_out is not None else "--%"
-        if w_spd is not None:
+        if r_day > 0:
+            # It rained today: the day total replaces the wind (shown on the VIENTO card)
+            bottom += " Lluv {:.1f}mm".format(r_day)
+        elif w_spd is not None:
             bottom += " {:.0f}km/h".format(w_spd)
             if w_spd > 0 and w_dir is not None:
                 bottom += " " + _get_compass_point(w_dir)
@@ -691,17 +694,16 @@ class WeatherDisplay:
             ]
 
         elif card == "lluvia":
-            # PRECIPITACION
-            r_rate = data.get("rain_rate_mm_per_hr") or 0.0
-            r_day = data.get("rain_day_mm") or 0.0
-            r_month = data.get("rain_month_mm") or 0.0
-            r_year = data.get("rain_year_mm") or 0.0
-
+            # PRECIPITACION: always shown (month/year totals matter on dry days too); the
+            # intensity line only while it rains, the current storm otherwise
+            r_rate = float(data.get("rain_rate_mm_per_hr") or 0)
+            first = ("Tasa: {:.1f} mm/h".format(r_rate) if r_rate > 0 else
+                     "Torm: {:.1f} mm".format(float(data.get("storm_rain_mm") or 0)))
             return "LLUVIA", [
-                "Tasa: {:.1f} mm/h".format(r_rate),
-                "Hoy:  {:.1f} mm".format(r_day),
-                "Mes:  {:.1f} mm".format(r_month),
-                "Ano:  {:.1f} mm".format(r_year)
+                first,
+                "Hoy:  {:.1f} mm".format(float(data.get("rain_day_mm") or 0)),
+                "Mes:  {:.1f} mm".format(float(data.get("rain_month_mm") or 0)),
+                "Ano:  {:.1f} mm".format(float(data.get("rain_year_mm") or 0))
             ]
 
         elif card == "sol":
@@ -749,11 +751,13 @@ class WeatherDisplay:
         answered for STALE_DATA_SECONDS ([SIN DATOS 5m]) or the last Sheets upload failed.
         Between NIGHT_START_HOUR and NIGHT_END_HOUR the screen is off unless there is an alert.
         Cards follow _ROTATION: the big temperature (AHORA) alternates with EXTERIOR, VIENTO,
-        LLUVIA (only while it rains), SOL/PRON, SISTEMA and SUBIDAS.
+        LLUVIA, SOL/LUNA, SISTEMA and SUBIDAS. A card that fails to draw shows ERROR PANTALLA
+        with the exception, instead of silently keeping the previous card.
         """
         if not self.has_oled or not self.oled:
             return
 
+        card = "?"
         try:
             # Update persistent cloud status if upload events occurred
             if uploaded_wu is not None or uploaded_gdrive is not None:
@@ -870,5 +874,18 @@ class WeatherDisplay:
             # Check if 20-second Google Sheets LED timer should expire
             self.check_led_timer()
 
-        except Exception:
-            pass
+        except Exception as e:
+            # Never silently: a card that fails to draw would just never appear on screen
+            self.errors += 1
+            self.last_error = "{}: {}".format(card, repr(e))[:64]
+            print("[OLED] Error dibujando tarjeta " + self.last_error)
+            try:
+                self.oled.fill(0)
+                self.oled.text("ERROR PANTALLA", 0, 0, 1)
+                msg = self.last_error
+                for i in range(4):
+                    self.oled.text(msg[16 * i:16 * i + 16], 0, 20 + 11 * i, 1)
+                self.oled.show()
+                self.last_card_lines = None
+            except Exception:
+                pass

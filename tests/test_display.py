@@ -112,14 +112,46 @@ def test_format_age():
 def test_rotation_alternates_big_temperature_and_forecast(screen, clock):
     titles = [show(screen, clock, "14:%02d" % i, WEATHER).header()[0][0] for i in range(12)]
     assert titles[0::2] == ["AHORA", "PRONOST."] * 3
-    assert titles[1::2] == ["EXTERIOR", "VIENTO", "SOL/LUNA", "SISTEMA", "SUBIDAS", "EXTERIOR"]
+    assert titles[1::2] == ["EXTERIOR", "VIENTO", "LLUVIA", "SOL/LUNA", "SISTEMA", "SUBIDAS"]
 
 
-def test_rain_card_only_while_it_rains(screen, clock):
-    rain = dict(WEATHER, rain_rate_mm_per_hr=2.5, rain_day_mm=1.2)
-    titles = [show(screen, clock, "15:%02d" % i, rain).header()[0][0] for i in range(12)]
-    assert "LLUVIA" in titles
-    assert all(a != b for a, b in zip(titles, titles[1:]))      # never the same card twice in a row
+def card_texts(screen, clock, data, title):
+    for i in range(14):
+        oled = show(screen, clock, "15:%02d" % i, data)
+        if oled.header()[0][0] == title:
+            return [t[0].strip() for t in oled.last_texts()]
+    raise AssertionError(title + " no aparecio en la rotacion")
+
+
+def test_rain_card_while_it_rains(screen, clock):
+    rain = dict(WEATHER, rain_rate_mm_per_hr=2.5, rain_day_mm=1.2, rain_month_mm=70.9, rain_year_mm=424.7)
+    texts = card_texts(screen, clock, rain, "LLUVIA")
+    assert "Tasa: 2.5 mm/h" in texts and "Hoy:  1.2 mm" in texts and "Ano:  424.7 mm" in texts
+
+
+def test_rain_card_on_a_dry_day_shows_totals(screen, clock):
+    # 12-oct-2026: 2.5 mm fell in the morning, rate back to 0 (the card used to be skipped)
+    dry = dict(WEATHER, rain_rate_mm_per_hr=0.0, rain_day_mm=2.5, storm_rain_mm=2.5, rain_month_mm=71.1)
+    texts = card_texts(screen, clock, dry, "LLUVIA")
+    assert "Torm: 2.5 mm" in texts and "Hoy:  2.5 mm" in texts and "Mes:  71.1 mm" in texts
+    nothing = dict(WEATHER, rain_month_mm=None, rain_year_mm=None)   # values missing: zeros, no crash
+    assert "Mes:  0.0 mm" in card_texts(screen, clock, nothing, "LLUVIA")
+
+
+def test_big_temperature_shows_rain_of_the_day(screen, clock):
+    oled = show(screen, clock, "14:00", dict(WEATHER, rain_day_mm=2.5))
+    assert any(t[0].strip() == "72% Lluv 2.5mm" for t in oled.last_texts())
+
+
+def test_card_error_is_shown_not_swallowed(screen, clock, monkeypatch):
+    def broken(card, data):
+        raise ValueError("dato raro")
+    show(screen, clock, "14:00", WEATHER)                       # AHORA (big number, not a text card)
+    monkeypatch.setattr(screen, "_get_card_content", broken)
+    oled = show(screen, clock, "14:01", WEATHER)
+    texts = [t[0] for t in oled.last_texts()]
+    assert "ERROR PANTALLA" in texts and any("exterior" in t for t in texts)
+    assert screen.errors == 1 and "dato raro" in screen.last_error
 
 
 def test_big_temperature_card(screen, clock):
