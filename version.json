@@ -1,17 +1,17 @@
 {
-  "version": "1.0.18",
+  "version": "1.0.19",
   "date": "2026-10-12",
-  "description": "Pantalla: tarjeta HOY, tiempos por tarjeta, alertas de helada y rafaga, boton BOOT de diagnostico",
+  "description": "Los reinicios por actualizacion se distinguen de las caidas",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "af47a124b9d5493b1a593ee2cee3ae3a2a3129e2f04bf2004e63cb95edb98686"
+      "sha256": "7f3ebc93669d3822c63995d6f5bf0654182d1a9e1b9b176f96c3b411e783e058"
     },
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "cacafd6c0953b8fcf3caa41bd57bdc5a6120e7f1f9b3d85599a566f90f2be300"
+      "sha256": "0efc2d26a90b8a92a013b3e03f9bd7fcdd8df5c80d6d5fddca1d251633151add"
     },
     {
       "remote": "src/davis_reader.mpy",
