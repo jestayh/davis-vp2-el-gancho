@@ -653,9 +653,10 @@ def parse_packet(packet):
             # Diagnostics & Astronomical
             "console_battery_v": console_battery_v,
             "tx_battery_status": tx_batt_status,
-            "wind_samples": 225,
+            # Not in the LOOP packet: read from the console archive when the row is logged
+            "wind_samples": None,
             "wind_tx": 1,
-            "iss_recept": 100.0,
+            "iss_recept": None,
             "arc_int": 10,
             "sunrise": format_time_hm(sunrise_raw),
             "sunset": format_time_hm(sunset_raw),

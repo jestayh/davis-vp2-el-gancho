@@ -71,9 +71,10 @@ def upload_to_google_sheets(script_url, data, timeout=12):
         "in_heat_c": data.get("in_heat_c"),
         "in_emc": data.get("in_emc"),
         "in_air_density": data.get("in_air_density"),
-        "wind_samples": data.get("wind_samples") if data.get("wind_samples") is not None else 225,
+        # Empty when unknown rather than an invented 225 samples / 100 % reception
+        "wind_samples": data.get("wind_samples"),
         "wind_tx": data.get("wind_tx") if data.get("wind_tx") is not None else 1,
-        "iss_recept": data.get("iss_recept") if data.get("iss_recept") is not None else 100.0,
+        "iss_recept": data.get("iss_recept"),
         "arc_int": data.get("arc_int") if data.get("arc_int") is not None else 10,
         "console_battery_v": data.get("console_battery_v"),
         "tx_battery_status": data.get("tx_battery_status"),

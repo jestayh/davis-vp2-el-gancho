@@ -302,6 +302,20 @@ def parse_archive_record(rec, rec_tuple):
     }
 
 
+def read_wind_samples(slot_tuple):
+    """
+    Wind samples the console counted for the 10-min interval ending at slot_tuple (its archive
+    record), or None if that record is not written yet or the console did not answer. The live
+    LOOP packet does not carry this number.
+    """
+    since = _secs_to_tuple(_tuple_to_secs(slot_tuple) - ARCHIVE_INTERVAL_SECONDS)
+    raw = dmpaft_fetch_raw(DAVIS_HOST, DAVIS_PORT, since, slot_tuple, max_records=1, timeout=5)
+    if not raw or raw[0][0] != slot_tuple:
+        return None
+    samples = struct.unpack_from("<H", raw[0][1], 18)[0]
+    return samples if samples != 0xFFFF else None
+
+
 def _f_to_c(temp_f):
     return round((temp_f - 32.0) * 5.0 / 9.0, 1) if temp_f is not None else None
 

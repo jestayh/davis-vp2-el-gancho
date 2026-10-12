@@ -46,6 +46,8 @@ NTP_RETRY_SECONDS = 300
 NTP_RESYNC_SECONDS = 86400
 # Attempts to recover a gap from the console archive before giving it up
 GAP_RECOVERY_MAX_FAILURES = 6
+# The console writes its archive record a few seconds after each 10-min mark
+ARCHIVE_SETTLE_SECONDS = 15
 
 IS_ESP32 = sys.platform == "esp32"
 _led_p = STATUS_LED_PIN if globals().get("ENABLE_STATUS_LED", True) else None
@@ -263,6 +265,14 @@ def run_gap_recovery(until_tuple):
         return False, False
 
 
+def read_wind_samples(slot_tuple):
+    try:
+        return _with_history_module(lambda hr: hr.read_wind_samples(slot_tuple))
+    except Exception as e:
+        log("[MUESTRAS] Error: {}".format(e))
+        return None
+
+
 def console_backfill_pending():
     try:
         return _with_history_module(lambda hr: hr.console_backfill_pending())
@@ -459,6 +469,17 @@ def main(max_cycles=None):
 
                     if reset_cause:
                         record_data["reset_cause"] = reset_cause
+
+                    # Wind samples (and ISS reception) of this interval come from the console's own
+                    # archive record, written a few seconds after the slot starts
+                    wait = ARCHIVE_SETTLE_SECONDS - (time.time() - aligned_utc_secs)
+                    if 0 < wait <= ARCHIVE_SETTLE_SECONDS:
+                        time.sleep(wait)
+                    ts = record_data["timestamp"]
+                    samples = read_wind_samples((int(ts[0:4]), int(ts[5:7]), int(ts[8:10]), int(ts[11:13]), int(ts[14:16])))
+                    if samples is not None:
+                        record_data["wind_samples"] = samples
+                        record_data["iss_recept"] = round(min(100.0, samples / 225.0 * 100.0), 1)
 
                     # Local CSV is always appended immediately (never lost)
                     log_reading_csv(CSV_FILEPATH, record_data, uploaded=False)
