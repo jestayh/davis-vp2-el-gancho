@@ -1,12 +1,12 @@
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "date": "2026-10-11",
-  "description": "Sin hora valida no registra; recupera cortes desde la consola",
+  "description": "Recupera huecos 03-oct y 11-oct desde la consola; aviso sin datos",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "9a47672e999d9b2b2657777c5a22983b83951fa14299e4092504f4ead141609a"
+      "sha256": "0d492e48346ad8586df1dbe585ef4f92a9b42a890ed8aaed70209f691a26a040"
     },
     {
       "remote": "src/display.mpy",
@@ -26,12 +26,12 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "8245ba4a444e78afc67f11c31fe311dfb1ca39aea9a6617982ae3b83de6e70e4"
+      "sha256": "3fa7895f8bb8a3cf09d4f0e36a9971bf8eecdc0797a489bd3aad8c4abff7facc"
     },
     {
       "remote": "src/history_recovery.mpy",
       "local": "src/history_recovery.mpy",
-      "sha256": "2cf151de2f1550cfdde16e5787ed5ce0d4906a025d5e633ea5114d248effdbea"
+      "sha256": "6a0956da4f2dabe0a5af8491c385ff2c2c4e1f94f8bec7c96e77d40fbeb78982"
     },
     {
       "remote": "src/ota_updater.mpy",
