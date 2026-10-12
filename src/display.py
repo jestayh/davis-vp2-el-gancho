@@ -824,6 +824,8 @@ class WeatherDisplay:
             rec = "{:.0f}%".format(self.iss_recept) if self.iss_recept is not None else "--"
             c_str = "{:.2f}V".format(c_volt) if c_volt is not None else "--V"
             reset = _RESET_SHORT.get(self.reset_cause, self.reset_cause) or "--"
+            if reset.startswith("Actualizacion"):
+                reset = "OTA"
 
             return "SISTEMA", [
                 "FW: v" + str(self.fw_version or "--"),

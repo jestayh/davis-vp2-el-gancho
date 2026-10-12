@@ -300,10 +300,32 @@ def read_reset_cause():
         )
         for attr, name in names:
             if cause == getattr(machine, attr, None):
-                return name
-        return "Causa {}".format(cause)
+                break
+        else:
+            return "Causa {}".format(cause)
+        # machine.reset() after an OTA install also reads as a hardware reset: the version under
+        # trial (until the first good upload) tells them apart, so updates are not reported as crashes
+        if attr in ("HARD_RESET", "SOFT_RESET"):
+            update = ota_update_boot()
+            if update:
+                return update
+        return name
     except Exception:
         return None
+
+
+def ota_update_boot(pending_file="data/ota_pending.json"):
+    """'Actualizacion v1.0.19' on the first boot of a freshly installed version, with
+    ' (arranque N)' on later boots before it is confirmed; None when no update is under trial"""
+    try:
+        import json
+        with open(pending_file, "r") as f:
+            st = json.load(f)
+    except Exception:
+        return None
+    label = "Actualizacion v{}".format(st.get("version"))
+    boots = st.get("boots", 1)
+    return label if boots <= 1 else "{} (arranque {})".format(label, boots)
 
 
 def _with_history_module(fn):

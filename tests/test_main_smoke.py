@@ -62,3 +62,14 @@ def test_stale_py_next_to_mpy_is_removed(tmp_path):
     assert removed == ["google_sheets.py"]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["__init__.py", "config_like.py", "google_sheets.mpy", "health.mpy"]
     assert main.drop_stale_sources(str(tmp_path / "missing")) == []
+
+
+def test_restart_after_an_ota_install_is_named_as_such(tmp_path):
+    import json
+    import main
+    pending = tmp_path / "ota_pending.json"
+    assert main.ota_update_boot(str(pending)) is None                  # nothing under trial
+    pending.write_text(json.dumps({"version": "1.0.19", "previous": "1.0.18", "boots": 1}))
+    assert main.ota_update_boot(str(pending)) == "Actualizacion v1.0.19"
+    pending.write_text(json.dumps({"version": "1.0.19", "previous": "1.0.18", "boots": 2}))
+    assert main.ota_update_boot(str(pending)) == "Actualizacion v1.0.19 (arranque 2)"

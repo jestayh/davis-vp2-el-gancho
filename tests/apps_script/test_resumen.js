@@ -46,6 +46,7 @@ function station() {
   env.main = main;
   env.C = C;
   env.at = (k) => main.rows.find((r) => r[0] === k);
+  env.at("2026-10-11 16:40:00")[C("Reinicio")] = "Actualizacion v1.0.18";
   env.ctx.FAKE_NOW = "2026-10-12 08:00:00";
   env.props.WINDY_PASSWORD = "x";
   env.props.WINDY_CONTEO = JSON.stringify({ "2026-10-11": [144, 0] });
@@ -67,7 +68,8 @@ function station() {
   check(mail.body.includes("Lluvia  1,2 mm   (mes 71,2 · año 421,2)"), "lluvia del día, mes y año");
   check(mail.body.includes("Ráfaga  45 km/h del S a las 14:40"), "ráfaga máxima con dirección y hora");
   check(mail.body.includes("Datos       144/144 registros (100 %)"), "registros completos");
-  check(mail.body.includes("v1.0.18 · 0 reinicios · RAM mínima 48 KB"), "firmware, reinicios y RAM");
+  check(mail.body.includes("v1.0.18 · 1 actualización · 0 reinicios · RAM mínima 48 KB"),
+        "firmware, actualizaciones aparte de los reinicios, RAM");
   check(mail.body.includes("Planilla ✅  WU ✅  Windy ✅") && !mail.body.includes("PROBLEMAS"), "envíos OK, sin problemas");
 }
 
@@ -109,7 +111,14 @@ function station() {
   ctx.revisarEstacion();
   check(mails.length === 0, "estación sana: ningún aviso -> " + subjects());
 
-  ["2026-10-11 22:00:00", "2026-10-12 03:10:00", "2026-10-12 05:00:00"].forEach((k) => { at(k)[C("Reinicio")] = "Watchdog"; });
+  // OTA installs are expected restarts: four of them alone do not trigger the alert
+  ["2026-10-11 21:00:00", "2026-10-11 21:20:00", "2026-10-11 21:40:00", "2026-10-12 06:00:00"].forEach((k, i) => {
+    at(k)[C("Reinicio")] = "Actualizacion v1.0." + (15 + i);
+  });
+  ctx.revisarEstacion();
+  check(mails.length === 0, "las actualizaciones OTA no cuentan como reinicios -> " + subjects());
+  ["2026-10-11 22:00:00", "2026-10-12 03:10:00"].forEach((k) => { at(k)[C("Reinicio")] = "Watchdog"; });
+  at("2026-10-12 05:00:00")[C("Reinicio")] = "Actualizacion v1.0.19 (arranque 2)";   // new version crashing
   const last = main.rows.slice(-37);
   last.forEach((r) => { r[C("Temp Ext (°C)")] = 7.7; r[C("Humedad Ext (%)")] = 91; });
   main.rows.slice(-18).forEach((r) => { r[C("Recepción ISS (%)")] = 60; });

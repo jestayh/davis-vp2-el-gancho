@@ -820,6 +820,14 @@ var ISS_LOW_PCT = 80;             // recepción media del transmisor en 3 h
 var UPLOAD_DOWN_MINUTES = 120;    // Weather Underground o Windy sin recibir este tiempo
 var WU_FAILS_DOWN = 15;           // de ~20 envíos a WU por intervalo de 10 min
 
+/**
+ * Arranque tras instalar una actualización OTA ("Actualizacion v1.0.19"): reinicio esperado, no
+ * una falla. Con "(arranque N)" la versión nueva se volvió a reiniciar antes de funcionar: sí cuenta.
+ */
+function esActualizacion_(cause) {
+  return /^Actualizaci[oó]n v[\d.]+$/.test(String(cause));
+}
+
 function revisarSistema_(sheet, tz, nowKey, props, to, url) {
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return;
@@ -845,7 +853,7 @@ function revisarSistema_(sheet, tz, nowKey, props, to, url) {
   }
 
   if (col.reset >= 0) {
-    var boots = within(24 * 60, col.reset);
+    var boots = within(24 * 60, col.reset).filter(function (x) { return !esActualizacion_(x.r[col.reset]); });
     if (boots.length >= REBOOTS_PER_DAY) {
       avisar_(props, to, url, "AVISO_REINICIOS", today, "se reinició " + boots.length + " veces en 24 h",
         "Reinicios: " + boots.map(function (x) { return x.r[col.reset] + " " + x.k.substring(5, 16); }).join(", ") +
@@ -977,13 +985,17 @@ function resumenDe_(ss, tz, day, nowKey) {
     Math.round(rows.length / EXPECTED_RECORDS * 100) + " %)");
   if (rows.length < EXPECTED_RECORDS - 4) problems.push("Faltan " + missing + " de " + EXPECTED_RECORDS + " registros del día");
 
-  var boots = col.reset >= 0 ? rows.filter(function (r) { return r[col.reset] !== ""; }) : [];
+  var starts = col.reset >= 0 ? rows.filter(function (r) { return r[col.reset] !== ""; }) : [];
+  var updates = starts.filter(function (r) { return esActualizacion_(r[col.reset]); });
+  var boots = starts.filter(function (r) { return !esActualizacion_(r[col.reset]); });
   var bootText = boots.map(function (r) { return r[col.reset] + " " + r[0].substring(11, 16); }).join(", ");
   var watchdog = boots.some(function (r) { return r[col.reset] === "Watchdog"; });
   if (boots.length >= 2 || watchdog) problems.push(boots.length + (boots.length === 1 ? " reinicio (" : " reinicios (") + bootText + ")");
 
   var st = estadoDe_(ss, tz, day + " 00:00:00", nowKey);
-  lines.push("  Firmware    " + (st.fw ? "v" + st.fw : "?") + " · " + boots.length + " reinicios" +
+  lines.push("  Firmware    " + (st.fw ? "v" + st.fw : "?") +
+    (updates.length ? " · " + updates.length + (updates.length === 1 ? " actualización" : " actualizaciones") : "") +
+    " · " + boots.length + " reinicios" +
     (st.memMin !== null ? " · RAM mínima " + fmt_(st.memMin, 0) + " KB" : ""));
   if (!st.reports) problems.push("El ESP32 no mandó su reporte de salud (pestaña Estado)");
   if (st.memMin !== null && st.memMin < 30) problems.push("Memoria libre baja en el ESP32: " + fmt_(st.memMin, 0) + " KB");
