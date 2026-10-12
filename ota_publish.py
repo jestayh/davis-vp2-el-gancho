@@ -55,6 +55,15 @@ def main():
     new_ver = bump_version(old_ver)
     today_str = datetime.date.today().isoformat()
 
+    # 0. Never publish a version that breaks the tests (the station installs it on its own)
+    print("[0/4] Ejecutando pruebas (python -m pytest tests)...")
+    tests = subprocess.run([sys.executable, "-m", "pytest", "tests", "-q"], capture_output=True, text=True)
+    print("      " + (tests.stdout.strip().splitlines() or ["(sin salida)"])[-1])
+    if tests.returncode != 0:
+        print(tests.stdout[-3000:])
+        print("  [ERROR] Hay pruebas que fallan: no se publica nada.")
+        sys.exit(1)
+
     print(f"[1/4] Incrementando version: v{old_ver} -> v{new_ver}")
     print(f"      Descripcion: {desc}")
 

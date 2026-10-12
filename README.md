@@ -173,6 +173,20 @@ mpremote connect COM3 reset
 
 ---
 
+## Pruebas
+
+```bash
+python -m pytest tests
+```
+
+Cubren la pantalla (sobre un SSD1306 simulado), la recuperación de huecos y el respaldo desde la
+consola (contra una consola Davis simulada en `localhost`), el OTA, el Apps Script de Google Sheets
+(sobre una planilla simulada con datos inventados, requiere Node.js) y que todo compile con
+`mpy-cross`. Usan `config.example.py`, nunca el `config.py` real. `ota_publish.py` las ejecuta
+antes de publicar y se detiene si alguna falla.
+
+---
+
 ## Actualización Remota (OTA)
 
 El sistema incluye soporte de actualización remota vía GitHub Releases:

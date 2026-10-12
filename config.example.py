@@ -34,6 +34,20 @@ CSV_LOG_INTERVAL_SECONDS = 300
 # Socket timeout in seconds
 SOCKET_TIMEOUT_SECONDS = 8
 
+# Seconds each OLED card stays on screen (also the main loop period)
+CARD_ROTATION_SECONDS = 5
+
+# Fill upload gaps (outages, power cuts) from the console archive (DMPAFT)
+ENABLE_DMPAFT_RECOVERY = True
+
+# Chile local time: "AUTO" follows the official DST rules; a fixed number (-3, -4) also works
+TIMEZONE_OFFSET_HOURS = "AUTO"
+
+# Status LED (GPIO 2 = built-in blue LED on the ESP32 DevKit): "HEARTBEAT" or "TOGGLE"
+STATUS_LED_PIN = 2
+ENABLE_STATUS_LED = True
+STATUS_LED_MODE = "HEARTBEAT"
+
 # ==============================================================================
 # 4. Storage Settings
 # ==============================================================================
