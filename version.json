@@ -1,17 +1,17 @@
 {
-  "version": "1.0.8",
+  "version": "1.0.9",
   "date": "2026-10-11",
-  "description": "Muestras de viento y recepcion ISS reales desde la consola",
+  "description": "Pantalla: modo noche, brillo medio y aviso de datos viejos o falla de Sheets",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "93afaefd6480c55360499a115d8794bbf1c94b7d8e8fb7e8674d606bc5a27900"
+      "sha256": "2310e04b04a13234cdd4790333f654ab11f5f55f120c1f11d15c92b71d7ba8bd"
     },
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "0c98b2c9ac2daca9b68d7d43ab6f86b4218a9d154f30e8799d0ead170aa4310c"
+      "sha256": "dc0d5be56bad63a046fa03d651ef06a27ee4903c7705e45f6b9bd996f5774a64"
     },
     {
       "remote": "src/davis_reader.mpy",
