@@ -45,7 +45,7 @@ from config import (
     CARD_ROTATION_SECONDS,
     CSV_LOG_INTERVAL_SECONDS,
     ENABLE_DMPAFT_RECOVERY,
-    SOCKET_TIMEOUT_SECONDS, CSV_FILEPATH,
+    SOCKET_TIMEOUT_SECONDS,
     WIFI_SSID, WIFI_PASSWORD,
     WIFI_NETWORKS, MAMA_FALLBACK_PASSWORD,
     GOOGLE_APPS_SCRIPT_URL,
@@ -53,10 +53,10 @@ from config import (
 )
 from src.davis_reader import (
     query_station, sync_console_time, log, format_timestamp_local, format_timestamp_utc,
-    clock_is_valid, sync_ntp
+    clock_is_valid, sync_ntp, read_wind_samples as davis_read_wind_samples
 )
 from src.weather_underground import upload
-from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailyStats
+from src.data_logger import update_last_sync_timestamp
 from src.display import WeatherDisplay, WAKE_SECONDS, DIAG_SECONDS
 from src.google_sheets import upload_to_google_sheets
 try:
@@ -393,25 +393,10 @@ def run_gap_recovery(until_tuple):
 
 def read_wind_samples(slot_tuple):
     try:
-        return _with_history_module(lambda hr: hr.read_wind_samples(slot_tuple))
+        return davis_read_wind_samples(DAVIS_HOST, DAVIS_PORT, slot_tuple)
     except Exception as e:
         log("[MUESTRAS] Error: {}".format(e))
         return None
-
-
-def console_backfill_pending():
-    try:
-        return _with_history_module(lambda hr: hr.console_backfill_pending())
-    except Exception:
-        return False
-
-
-def run_console_backfill():
-    try:
-        return _with_history_module(lambda hr: hr.run_console_backfill(display))
-    except Exception as e:
-        log("[RESPALDO] Error: {}".format(e))
-        return False
 
 
 def main(max_cycles=None):
@@ -429,7 +414,6 @@ def main(max_cycles=None):
     print("  Subida a Drive: {} (cada {}s)".format("Habilitado" if GOOGLE_APPS_SCRIPT_URL else "Deshabilitado", CSV_LOG_INTERVAL_SECONDS))
     print("  Auto-Recuperacion (DMPAFT): {}".format("Habilitado" if ENABLE_DMPAFT_RECOVERY else "Deshabilitado"))
     print("  LED de Estado (GPIO {}): {}".format(STATUS_LED_PIN, STATUS_LED_MODE if ENABLE_STATUS_LED else "Deshabilitado"))
-    print("  Base de Datos: {}".format(CSV_FILEPATH))
     print("=" * 70 + "\n")
 
     # Screen on for a while after every boot (also after an OTA install), even at night
@@ -484,7 +468,6 @@ def main(max_cycles=None):
             "barometer_trend": "Estable"
         }
 
-    stats = DailyStats()
     last_wu_upload_time = 0
     last_logged_slot = int(time.time() // CSV_LOG_INTERVAL_SECONDS)
     cycle = 0
@@ -496,7 +479,6 @@ def main(max_cycles=None):
     check_gap = True          # at boot and after any failed upload
     gap_until = None          # first record uploaded after the gap (exclusive end of the recovery)
     gap_failures = 0
-    backfill_pending = None   # unknown until the first successful upload
     hilows = {}               # today's extremes from the console, merged into every reading
     next_hilows = 0
     wu_fail_slot = 0          # failed WU uploads since the last Sheets record (sent with it)
@@ -641,9 +623,6 @@ def main(max_cycles=None):
                         record_data["iss_recept"] = round(min(100.0, samples / 225.0 * 100.0), 1)
                     display.set_iss_recept(record_data.get("iss_recept"))
 
-                    # Local CSV is always appended immediately (never lost)
-                    log_reading_csv(CSV_FILEPATH, record_data, uploaded=False)
-
                     # Upload to Google Sheets / Drive (via ultra-fast Cloudflare Worker proxy)
                     if not GOOGLE_APPS_SCRIPT_URL:
                         update_last_sync_timestamp(record_data["timestamp"])
@@ -693,12 +672,6 @@ def main(max_cycles=None):
                             if not check_gap:
                                 update_last_sync_timestamp(record_data["timestamp"])
 
-                                # One-time upload of the 2026-10-08 console day to the "Consola" tab
-                                if backfill_pending is None:
-                                    backfill_pending = console_backfill_pending()
-                                if backfill_pending and run_console_backfill():
-                                    backfill_pending = False
-
                                 # Health report to the "Estado" tab: right after boot, then daily
                                 health.err_display = display.errors - display_errors_reported
                                 if health.due() and upload_status(GOOGLE_APPS_SCRIPT_URL, health.report(),
@@ -724,11 +697,6 @@ def main(max_cycles=None):
 
                 # 4. Update OLED Display (slides vertically to next rotating card every 5s)
                 display.show_weather(data, cycle=cycle, now_str=format_timestamp_local())
-
-                # 5. Update Daily In-Memory Statistics
-                stats.update(data, True)
-                if cycle % 20 == 0:
-                    log(stats.get_summary())
 
                 # 5b. Daily Davis console clock check (skipped in cycles that upload to WU/Sheets)
                 if not wu_due and not drive_due and time.time() >= next_clock_check:

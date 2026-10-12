@@ -1,4 +1,4 @@
-"""Gap recovery and one-time backfill (src/history_recovery.py) against a fake Davis console on localhost"""
+"""Gap recovery (src/history_recovery.py) and archive reads (src/davis_reader.py) against a fake Davis console on localhost"""
 
 import os
 import socket
@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import pytest
 
 import src.data_logger as dl
+import src.davis_reader as dr
 import src.history_recovery as hr
 from src.davis_reader import calculate_crc
 
@@ -93,7 +94,6 @@ def station(console, tmp_path, monkeypatch):
     monkeypatch.setattr(hr, "DAVIS_PORT", console[1])
     monkeypatch.setattr(hr, "GOOGLE_APPS_SCRIPT_URL", "http://fake")
     monkeypatch.setattr(hr, "ENABLE_DMPAFT_RECOVERY", True)
-    monkeypatch.setattr(hr, "log_reading_csv", lambda *a, **k: True)
     monkeypatch.setattr(hr.time, "sleep", lambda s: None)
 
     class Uploads(list):
@@ -158,25 +158,9 @@ def test_interrupted_recovery_resumes_where_it_stopped(station):
 def test_invalid_dates_never_reach_last_sync(station, tmp_path):
     with open(dl.LAST_SYNC_FILE, "w") as f:
         f.write("1999-12-31 21:10:00")
-    assert dl.get_last_csv_timestamp(str(tmp_path / "none.csv")) is None
+    assert dl.get_last_sync() is None
     dl.update_last_sync_timestamp("2000-01-01 04:50:00")
     assert last_sync().startswith("1999")
-
-
-def test_backfill_jobs_run_once_and_skip_overwritten_windows(station):
-    assert hr.console_backfill_pending()
-    assert hr.run_console_backfill() is True
-    # 08-oct window: the whole console day goes to the Consola tab with a prefix
-    assert len(station) == 144 and all(u["destino"] == "consola" for u in station)
-    assert station[0]["timestamp"] == "CONSOLA 2026-10-08 00:00:00"
-    # The other windows are older or newer than this fake archive: done without uploading
-    assert not hr.console_backfill_pending()
-    assert hr.run_console_backfill() is True and len(station) == 144
-
-
-def test_backfill_retries_when_console_does_not_answer(station, monkeypatch):
-    monkeypatch.setattr(hr, "dmpaft_fetch_raw", lambda *a, **k: None)
-    assert hr.run_console_backfill() is False and hr.console_backfill_pending()
 
 
 def test_read_wind_samples_only_from_the_exact_record(station, monkeypatch):
@@ -188,15 +172,16 @@ def test_read_wind_samples_only_from_the_exact_record(station, monkeypatch):
         calls.append((since, until))
         return fetch.result
 
-    monkeypatch.setattr(hr, "dmpaft_fetch_raw", fetch)
+    monkeypatch.setattr(dr, "dmpaft_fetch_raw", fetch)
     slot = (2026, 10, 11, 22, 10)
     fetch.result = [(slot, bytes(rec))]
-    assert hr.read_wind_samples(slot) == 212 and calls[0] == ((2026, 10, 11, 22, 0), slot)
+    assert dr.read_wind_samples("console", 22222, slot) == 212 and calls[0] == ((2026, 10, 11, 22, 0), slot)
     fetch.result = [((2026, 10, 11, 22, 0), bytes(rec))]      # this slot not written yet
-    assert hr.read_wind_samples(slot) is None
+    assert dr.read_wind_samples("console", 22222, slot) is None
     fetch.result = None
-    assert hr.read_wind_samples(slot) is None
-    assert hr.read_wind_samples((2026, 11, 1, 0, 0)) is None and calls[-1][0] == (2026, 10, 31, 23, 50)
+    assert dr.read_wind_samples("console", 22222, slot) is None
+    assert dr.read_wind_samples("console", 22222, (2026, 11, 1, 0, 0)) is None
+    assert calls[-1][0] == (2026, 10, 31, 23, 50)
 
 
 def test_upload_payload_keeps_empty_values_empty(monkeypatch):

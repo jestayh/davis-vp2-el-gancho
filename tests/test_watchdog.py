@@ -75,7 +75,6 @@ def test_gap_recovery_feeds_per_record(monkeypatch, tmp_path):
     monkeypatch.setattr(dl, "LAST_SYNC_FILE", str(tmp_path / "last_sync.txt"))
     monkeypatch.setattr(hr, "GOOGLE_APPS_SCRIPT_URL", "http://fake")
     monkeypatch.setattr(hr, "ENABLE_DMPAFT_RECOVERY", True)
-    monkeypatch.setattr(hr, "log_reading_csv", lambda *a, **k: True)
     monkeypatch.setattr(hr, "upload_to_google_sheets", lambda url, rec: True)
     monkeypatch.setattr(hr.time, "sleep", lambda s: None)
     recs = [((2026, 10, 8, 10, m), bytes(52)) for m in (40, 50)]

@@ -36,7 +36,6 @@ def app(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "GOOGLE_APPS_SCRIPT_URL", "http://fake")
     monkeypatch.setattr(main, "run_console_clock_sync", lambda: 86400)
     monkeypatch.setattr(main, "run_gap_recovery", lambda until: (True, False))
-    monkeypatch.setattr(main, "console_backfill_pending", lambda: False)
     monkeypatch.setattr(main, "read_wind_samples", lambda slot: 221)
     return main, calls, clock
 

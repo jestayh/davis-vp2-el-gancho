@@ -1,6 +1,7 @@
 """
 Historical Data Recovery via Davis DMPAFT Protocol
-Isolated module to prevent boot-time memory retention in main loop.
+Loaded only while a gap is being filled (main._with_history_module), to keep the main loop's RAM
+free. Reading the archive itself lives in davis_reader (also used for every record's wind samples).
 
 The Davis console keeps ~17 days of 10-minute archive records. Whenever the ESP32 could
 not upload (no internet, no valid clock, power cut), the missing interval is read back
@@ -11,11 +12,6 @@ import time
 import sys
 
 try:
-    import usocket as socket
-except ImportError:
-    import socket
-
-try:
     import ustruct as struct
 except ImportError:
     import struct
@@ -23,172 +19,31 @@ except ImportError:
 from config import (
     DAVIS_HOST, DAVIS_PORT,
     ENABLE_DMPAFT_RECOVERY,
-    CSV_FILEPATH, GOOGLE_APPS_SCRIPT_URL
+    GOOGLE_APPS_SCRIPT_URL
 )
 from src.davis_reader import (
-    log, wakeup_console,
-    encode_davis_datetime, verify_crc,
+    log, dmpaft_fetch_raw, ARCHIVE_INTERVAL_SECONDS,
+    tuple_to_secs as _tuple_to_secs, secs_to_tuple as _secs_to_tuple, _EPOCH_OFFSET,
     calculate_dewpoint, get_effective_timezone_offset,
-    format_timestamp_utc, _civil_to_secs,
+    format_timestamp_utc,
     calculate_wet_bulb, calculate_wind_chill,
     calculate_heat_index, calculate_thw_index,
     calculate_wind_run, calculate_degree_days,
     calculate_indoor_heat_index, calculate_emc,
     calculate_air_density
 )
-from src.data_logger import (
-    log_reading_csv, get_last_csv_timestamp, update_last_sync_timestamp, file_exists
-)
+from src.data_logger import get_last_sync, update_last_sync_timestamp
 from src.google_sheets import upload_to_google_sheets
 from src import watchdog
 
 IS_ESP32 = sys.platform == "esp32"
 
-ARCHIVE_INTERVAL_SECONDS = 600
 RECOVERY_CHUNK_RECORDS = 72                # 12 h per pass: keeps raw records well under ~10 KB of RAM
 RECOVERY_MAX_AGE_SECONDS = 7 * 86400       # never reach further back than this
-
-# One-time jobs: windows of the console archive uploaded raw to the "Consola" tab, stamped with the
-# console clock, which ran exactly 3 h behind until it was fixed on 2026-10-11 ~12:25. The Apps
-# Script function importarConsola() measures that offset against the main sheet and inserts only
-# the dates the main sheet is missing. Every window ends before the clock fix, so +3 h holds for all.
-# - 08-oct: station unplugged twice while the internet was down, day uploaded stamped 1999/2000.
-# - 03-oct 06:30 and 11-oct 12:10-12:20: single records lost before gap recovery existed / while
-#   the ESP32 was being flashed. Windows include an hour around each gap.
-BACKFILL_JOBS = (
-    ("consola_20261008", (2026, 10, 7, 23, 50), (2026, 10, 8, 23, 50)),   # console clock: (exclusive, inclusive]
-    ("consola_20261003", (2026, 10, 3, 2, 20), (2026, 10, 3, 4, 30)),
-    ("consola_20261011", (2026, 10, 11, 7, 50), (2026, 10, 11, 9, 20)),
-)
-
-
-def _backfill_done_file(job_id):
-    return "data/" + job_id + ".done"
-
-# Seconds-since-epoch of the platform's time.gmtime(0) (1970 on PC, 2000 on MicroPython)
-_EPOCH_OFFSET = _civil_to_secs(*time.gmtime(0)[:6])
-
-
-def _tuple_to_secs(t):
-    return _civil_to_secs(t[0], t[1], t[2], t[3], t[4], 0)
-
-
-def _secs_to_tuple(secs):
-    t = time.gmtime(secs - _EPOCH_OFFSET)
-    return (t[0], t[1], t[2], t[3], t[4])
 
 
 def _ts_str(t):
     return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:00".format(t[0], t[1], t[2], t[3], t[4])
-
-
-def dmpaft_fetch_raw(host, port, since_tuple, until_tuple=None, max_records=RECOVERY_CHUNK_RECORDS, timeout=10):
-    """
-    Read raw 52-byte archive records with since_tuple < date <= until_tuple (console clock,
-    tuples are (year, month, day, hour, minute)), oldest first, at most max_records.
-    Returns a list of (date_tuple, record_bytes), or None if the console did not answer.
-    Records are parsed later, one at a time, to keep RAM low on the ESP32.
-    """
-    sock = None
-    records = []
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-
-        wakeup_console(sock)
-
-        sock.sendall(b"DMPAFT\n")
-        ack = sock.recv(1)
-        if ack != b"\x06":
-            log("Consola Davis no acepto DMPAFT")
-            return None
-
-        sock.sendall(encode_davis_datetime(*since_tuple))
-
-        hdr_buf = sock.recv(10)
-        if hdr_buf.startswith(b"\x06"):
-            hdr = hdr_buf[1:7]
-        else:
-            hdr = hdr_buf[:6]
-
-        if len(hdr) < 6:
-            return None
-
-        npages, start_idx, _ = struct.unpack("<HHH", hdr)
-        log("DMPAFT: {} paginas disponibles (indice inicial={})".format(npages, start_idx))
-        if npages == 0:
-            sock.sendall(b"\x1b")
-            return records
-
-        done = False
-        for page_idx in range(npages):
-            watchdog.feed()
-            sock.sendall(b"\x06")
-
-            page_data = b""
-            start_rx = time.time()
-            while len(page_data) < 267 and (time.time() - start_rx) < timeout:
-                chunk = sock.recv(267 - len(page_data))
-                if not chunk:
-                    break
-                page_data += chunk
-
-            # A bad page would silently drop 5 records: give up and retry the whole read later
-            if len(page_data) < 267:
-                log("Pagina {} incompleta ({} bytes)".format(page_idx, len(page_data)))
-                sock.sendall(b"\x1b")
-                return None
-
-            if not verify_crc(page_data):
-                log("Pagina {} error de CRC".format(page_idx))
-                sock.sendall(b"\x1b")
-                return None
-
-            for rec_i in range(5):
-                if page_idx == 0 and rec_i < start_idx:
-                    continue
-                offset = 1 + (rec_i * 52)
-                rec = page_data[offset : offset + 52]
-
-                d_raw, t_raw = struct.unpack_from("<HH", rec, 0)
-                if d_raw == 0xFFFF or d_raw == 0:
-                    continue
-
-                rec_tuple = (((d_raw >> 9) & 0x7F) + 2000, (d_raw >> 5) & 0x0F, d_raw & 0x1F,
-                             t_raw // 100, t_raw % 100)
-                if rec_tuple <= since_tuple:
-                    continue  # older records from the circular buffer
-                if until_tuple is not None and rec_tuple > until_tuple:
-                    done = True
-                    break
-
-                records.append((rec_tuple, bytes(rec)))
-                if len(records) >= max_records:
-                    done = True
-                    break
-
-            if done:
-                break
-
-        sock.sendall(b"\x1b")
-        time.sleep(0.2)
-    except Exception as e:
-        log("Error en recuperacion DMPAFT: {}".format(e))
-        return None
-    finally:
-        if sock:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass
-            try:
-                sock.close()
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-    return records
 
 
 def parse_archive_record(rec, rec_tuple):
@@ -304,20 +159,6 @@ def parse_archive_record(rec, rec_tuple):
     }
 
 
-def read_wind_samples(slot_tuple):
-    """
-    Wind samples the console counted for the 10-min interval ending at slot_tuple (its archive
-    record), or None if that record is not written yet or the console did not answer. The live
-    LOOP packet does not carry this number.
-    """
-    since = _secs_to_tuple(_tuple_to_secs(slot_tuple) - ARCHIVE_INTERVAL_SECONDS)
-    raw = dmpaft_fetch_raw(DAVIS_HOST, DAVIS_PORT, since, slot_tuple, max_records=1, timeout=5)
-    if not raw or raw[0][0] != slot_tuple:
-        return None
-    samples = struct.unpack_from("<H", raw[0][1], 18)[0]
-    return samples if samples != 0xFFFF else None
-
-
 def _f_to_c(temp_f):
     return round((temp_f - 32.0) * 5.0 / 9.0, 1) if temp_f is not None else None
 
@@ -340,7 +181,7 @@ def recover_gap(until_tuple, disp=None):
     if not ENABLE_DMPAFT_RECOVERY or not GOOGLE_APPS_SCRIPT_URL:
         return True, False
 
-    since = get_last_csv_timestamp(CSV_FILEPATH)
+    since = get_last_sync()
     if not since:
         log("[HISTORICO] Sin registro previo valido; no hay vacio que recuperar.")
         return True, False
@@ -362,7 +203,7 @@ def recover_gap(until_tuple, disp=None):
 
     # Exclusive upper bound: the record stamped until_tuple was already uploaded live
     last_wanted = _secs_to_tuple(until_secs - 60)
-    raw = dmpaft_fetch_raw(DAVIS_HOST, DAVIS_PORT, since, last_wanted)
+    raw = dmpaft_fetch_raw(DAVIS_HOST, DAVIS_PORT, since, last_wanted, max_records=RECOVERY_CHUNK_RECORDS)
     if raw is None:
         log("[HISTORICO] La consola no respondio; se reintentara.")
         return False, False
@@ -378,7 +219,6 @@ def recover_gap(until_tuple, disp=None):
         watchdog.feed()
         rec = parse_archive_record(rec_bytes, rec_tuple)
         del rec_bytes
-        log_reading_csv(CSV_FILEPATH, rec, uploaded=False)
         try:
             ok = upload_to_google_sheets(GOOGLE_APPS_SCRIPT_URL, rec)
         except Exception as e:
@@ -405,80 +245,3 @@ def recover_gap(until_tuple, disp=None):
         update_last_sync_timestamp(_ts_str(last_wanted))
         return True, True
     return False, True
-
-
-def _pending_jobs():
-    if not GOOGLE_APPS_SCRIPT_URL:
-        return []
-    return [job for job in BACKFILL_JOBS if not file_exists(_backfill_done_file(job[0]))]
-
-
-def console_backfill_pending():
-    return bool(_pending_jobs())
-
-
-def _mark_done(job_id, sent):
-    try:
-        with open(_backfill_done_file(job_id), "w") as f:
-            f.write(str(sent))
-    except Exception:
-        pass
-
-
-def run_console_backfill(disp=None):
-    """
-    One-time upload of each BACKFILL_JOBS window of the console archive (console clock) to the
-    "Consola" tab. Rows are tagged destino=consola; the timestamp carries a "CONSOLA " prefix so
-    an older Apps Script that ignores the tag can never mix them with real dates.
-    Returns True once every job is done (then it never runs again).
-    """
-    for job in _pending_jobs():
-        if not _run_backfill_job(job, disp):
-            return False
-    return True
-
-
-def _run_backfill_job(job, disp):
-    job_id, since, until = job
-    label = "RESPALDO {:02d}-{:02d}".format(until[2], until[1])
-    log("[RESPALDO] Leyendo de la consola {} -> {} para la pestana Consola...".format(_ts_str(since), _ts_str(until)))
-    _show(disp, label, "Leyendo consola", "", "")
-    raw = dmpaft_fetch_raw(DAVIS_HOST, DAVIS_PORT, since, until, max_records=160)
-    if raw is None:
-        log("[RESPALDO] La consola no respondio; se reintentara.")
-        return False
-    if not raw:
-        # Already overwritten in the circular archive: nothing left to recover
-        log("[RESPALDO] La consola ya no tiene registros de {}.".format(job_id))
-        _mark_done(job_id, 0)
-        return True
-
-    total = len(raw)
-    sent = 0
-    while raw:
-        rec_tuple, rec_bytes = raw.pop(0)
-        watchdog.feed()
-        rec = parse_archive_record(rec_bytes, rec_tuple)
-        del rec_bytes
-        rec["timestamp"] = "CONSOLA " + rec["timestamp"]
-        rec["destino"] = "consola"
-        try:
-            ok = upload_to_google_sheets(GOOGLE_APPS_SCRIPT_URL, rec)
-        except Exception as e:
-            log("[RESPALDO] Error subiendo: {}".format(e))
-            ok = False
-        if not ok:
-            log("[RESPALDO] Subida interrumpida ({}/{}); se reintentara.".format(sent, total))
-            return False
-        sent += 1
-        if sent % 4 == 0 or sent == total:
-            _show(disp, label, "Subiendo", "{}/{}".format(sent, total), "")
-        del rec
-        if IS_ESP32:
-            import gc
-            gc.collect()
-        time.sleep(0.2)
-
-    _mark_done(job_id, sent)
-    log("[RESPALDO] {} registros de la consola subidos a la pestana Consola ({}).".format(sent, job_id))
-    return True

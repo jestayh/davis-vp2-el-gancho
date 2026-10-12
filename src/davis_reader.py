@@ -698,6 +698,149 @@ def _civil_to_secs(year, month, day, hour, minute, sec):
     return (era * 146097 + doe - 719468) * 86400 + hour * 3600 + minute * 60 + sec
 
 
+# ---------------------------------------------------------------------------------------
+# Console archive (DMPAFT). Here and not in history_recovery because every 10-min upload reads
+# its wind samples from the archive: loading that module each time fragmented the RAM.
+# ---------------------------------------------------------------------------------------
+
+ARCHIVE_INTERVAL_SECONDS = 600
+# Seconds-since-epoch of the platform's time.gmtime(0) (1970 on PC, 2000 on MicroPython)
+_EPOCH_OFFSET = _civil_to_secs(*time.gmtime(0)[:6])
+
+
+def tuple_to_secs(t):
+    return _civil_to_secs(t[0], t[1], t[2], t[3], t[4], 0)
+
+
+def secs_to_tuple(secs):
+    t = time.gmtime(secs - _EPOCH_OFFSET)
+    return (t[0], t[1], t[2], t[3], t[4])
+
+
+def dmpaft_fetch_raw(host, port, since_tuple, until_tuple=None, max_records=72, timeout=10):
+    """
+    Read raw 52-byte archive records with since_tuple < date <= until_tuple (console clock,
+    tuples are (year, month, day, hour, minute)), oldest first, at most max_records.
+    Returns a list of (date_tuple, record_bytes), or None if the console did not answer.
+    Records are parsed later, one at a time, to keep RAM low on the ESP32.
+    """
+    from src import watchdog
+    sock = None
+    records = []
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+
+        wakeup_console(sock)
+
+        sock.sendall(b"DMPAFT\n")
+        ack = sock.recv(1)
+        if ack != b"\x06":
+            log("Consola Davis no acepto DMPAFT")
+            return None
+
+        sock.sendall(encode_davis_datetime(*since_tuple))
+
+        hdr_buf = sock.recv(10)
+        if hdr_buf.startswith(b"\x06"):
+            hdr = hdr_buf[1:7]
+        else:
+            hdr = hdr_buf[:6]
+
+        if len(hdr) < 6:
+            return None
+
+        npages, start_idx, _ = struct.unpack("<HHH", hdr)
+        log("DMPAFT: {} paginas disponibles (indice inicial={})".format(npages, start_idx))
+        if npages == 0:
+            sock.sendall(b"\x1b")
+            return records
+
+        done = False
+        for page_idx in range(npages):
+            watchdog.feed()
+            sock.sendall(b"\x06")
+
+            page_data = b""
+            start_rx = time.time()
+            while len(page_data) < 267 and (time.time() - start_rx) < timeout:
+                chunk = sock.recv(267 - len(page_data))
+                if not chunk:
+                    break
+                page_data += chunk
+
+            # A bad page would silently drop 5 records: give up and retry the whole read later
+            if len(page_data) < 267:
+                log("Pagina {} incompleta ({} bytes)".format(page_idx, len(page_data)))
+                sock.sendall(b"\x1b")
+                return None
+
+            if not verify_crc(page_data):
+                log("Pagina {} error de CRC".format(page_idx))
+                sock.sendall(b"\x1b")
+                return None
+
+            for rec_i in range(5):
+                if page_idx == 0 and rec_i < start_idx:
+                    continue
+                offset = 1 + (rec_i * 52)
+                rec = page_data[offset : offset + 52]
+
+                d_raw, t_raw = struct.unpack_from("<HH", rec, 0)
+                if d_raw == 0xFFFF or d_raw == 0:
+                    continue
+
+                rec_tuple = (((d_raw >> 9) & 0x7F) + 2000, (d_raw >> 5) & 0x0F, d_raw & 0x1F,
+                             t_raw // 100, t_raw % 100)
+                if rec_tuple <= since_tuple:
+                    continue  # older records from the circular buffer
+                if until_tuple is not None and rec_tuple > until_tuple:
+                    done = True
+                    break
+
+                records.append((rec_tuple, bytes(rec)))
+                if len(records) >= max_records:
+                    done = True
+                    break
+
+            if done:
+                break
+
+        sock.sendall(b"\x1b")
+        time.sleep(0.2)
+    except Exception as e:
+        log("Error en recuperacion DMPAFT: {}".format(e))
+        return None
+    finally:
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                sock.close()
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+    return records
+
+
+def read_wind_samples(host, port, slot_tuple):
+    """
+    Wind samples the console counted for the 10-min interval ending at slot_tuple (its archive
+    record), or None if that record is not written yet or the console did not answer. The live
+    LOOP packet does not carry this number.
+    """
+    since = secs_to_tuple(tuple_to_secs(slot_tuple) - ARCHIVE_INTERVAL_SECONDS)
+    raw = dmpaft_fetch_raw(host, port, since, slot_tuple, max_records=1, timeout=5)
+    if not raw or raw[0][0] != slot_tuple:
+        return None
+    samples = struct.unpack_from("<H", raw[0][1], 18)[0]
+    return samples if samples != 0xFFFF else None
+
+
 def _drain_socket(sock, timeout):
     """Discard any stale bytes waiting on the socket"""
     try:
