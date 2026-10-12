@@ -1,17 +1,17 @@
 {
-  "version": "1.0.14",
+  "version": "1.0.15",
   "date": "2026-10-11",
-  "description": "Watchdog de hardware: reinicio automatico si el programa se cuelga",
+  "description": "Reporte diario de salud; pronostico mas lento; tarjeta Sol y Luna",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "aa9f1755dc8c48065b6044ce383c3a2cd883fa2ac900911fd48d130642e4f7df"
+      "sha256": "907fa3a060fa601ca9814aa99fb4ec76bfd20dbe5e4f8c76ad2de66fb4a109c4"
     },
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "caf0a356cd5164659bbeb326dc62a850f6085feaab18176cc16065b21467a406"
+      "sha256": "abbe53a99eee1e9eebb6af1b00ff984b990ec59137bfcbae4b1cefe427726c9d"
     },
     {
       "remote": "src/davis_reader.mpy",
@@ -26,7 +26,7 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "9518c6ed35633029176ae367e0cddac6c3b51a76450a2fedbd4161a1584352a6"
+      "sha256": "c442b7bfb065bf662f16cc5721b859e0e251cdf7a7d979259779ccc2ed72fdd8"
     },
     {
       "remote": "src/history_recovery.mpy",
@@ -42,6 +42,11 @@
       "remote": "src/watchdog.mpy",
       "local": "src/watchdog.mpy",
       "sha256": "c15b82dd2d5ea9c4d8ea93ab1c016762cba8fd598ee673a8c91031d4aeeb85d1"
+    },
+    {
+      "remote": "src/health.mpy",
+      "local": "src/health.mpy",
+      "sha256": "4c24b3aa5e6fed0aba831f5c657b50448e184e7845ac94d18f7c87ced8c9414f"
     }
   ]
 }
