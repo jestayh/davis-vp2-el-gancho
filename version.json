@@ -1,17 +1,17 @@
 {
-  "version": "1.0.10",
+  "version": "1.0.11",
   "date": "2026-10-11",
-  "description": "Pantalla: temperatura grande, tarjetas reordenadas y diagnostico",
+  "description": "Pantalla 15 min tras actualizar; OTA parte por el Worker HTTP",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "8423d4c0f1a9543ae94aa303475c5a97fc263f52a3924a39f5bfe430204404bf"
+      "sha256": "0b3a1258a027f7ac179cb4e3b9aca1936c844735a6a3b7e5a796946b7567ce8b"
     },
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "0fa63a6c1120f57aa213fa874a8e3a0d4e258ed058cfcaeb160c2b0b2cbc3f02"
+      "sha256": "3edbc3037479819e787ffd1e0648c9a6b362ec34f7d2b4ce1bb65e2fb677472a"
     },
     {
       "remote": "src/davis_reader.mpy",
@@ -36,7 +36,7 @@
     {
       "remote": "src/ota_updater.mpy",
       "local": "src/ota_updater.mpy",
-      "sha256": "67646855a0e248c51544aafd83acda23abc27ade54605636d5463208c9e2d99b"
+      "sha256": "8a6e5ba34364eb470db3fd9be856ee6d452eb667c5e7100261d00530cf12422d"
     }
   ]
 }
