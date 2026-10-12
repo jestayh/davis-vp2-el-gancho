@@ -10,6 +10,7 @@
  * 4. Completa los acumulados de lluvia y la tendencia barométrica que los registros
  *    recuperados del archivo de la consola no traen.
  * 5. Auto-archivado anual automático en Google Drive el 1 de enero.
+ * 6. Pestaña "Estado": un reporte diario de salud del ESP32 (versión, memoria, WiFi, fallas).
  *
  * Funciones para ejecutar a mano desde el editor:
  * - activarAvisos(): correo si la estación pasa 60 min sin enviar datos (y cuando vuelven).
@@ -20,7 +21,22 @@
 
 var MIN_VALID_YEAR = 2025;
 var CONSOLE_SHEET_NAME = "Consola";
+var STATUS_SHEET_NAME = "Estado";
 var KEY_FORMAT = "yyyy-MM-dd HH:mm:ss";
+// Daily health report of the ESP32: [column title, field sent by the firmware]
+var STATUS_COLUMNS = [
+  ["Fecha / Hora", "timestamp"],
+  ["Firmware", "fw"],
+  ["Encendido (h)", "uptime_h"],
+  ["Último arranque", "reset_cause"],
+  ["RAM libre (KB)", "mem_free_kb"],
+  ["RAM mínima (KB)", "mem_min_kb"],
+  ["WiFi (dBm)", "rssi"],
+  ["Fallas consola", "err_console"],
+  ["Fallas Sheets", "err_sheets"],
+  ["Fallas WU", "err_wu"],
+  ["Recuperaciones consola", "recoveries"]
+];
 // Pluviómetro de 0,01" por golpe: los acumulados se suman en golpes para no arrastrar el redondeo a 0,1 mm
 var RAIN_CLICK_MM = 0.254;
 
@@ -30,6 +46,12 @@ function doPost(e) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var data = JSON.parse(e.postData.contents);
+
+    // Reporte diario del ESP32: su fecha trae el prefijo "ESTADO " para que una versión
+    // anterior de este script lo rechace en vez de mezclarlo con los datos del clima
+    if (data.destino === "estado") {
+      return text_(appendStatus_(ss, data));
+    }
 
     // Filas de respaldo de la consola: traen la hora de la consola con prefijo "CONSOLA "
     var toConsole = data.destino === "consola";
@@ -67,9 +89,37 @@ function text_(msg) {
 function getMainSheet_(ss) {
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
-    if (sheets[i].getName() !== CONSOLE_SHEET_NAME) return sheets[i];
+    var name = sheets[i].getName();
+    if (name !== CONSOLE_SHEET_NAME && name !== STATUS_SHEET_NAME) return sheets[i];
   }
   return sheets[0];
+}
+
+/** Appends one health report to the "Estado" tab (created at the end on first use) */
+function appendStatus_(ss, data) {
+  var key = normalizeKey_(String(data.timestamp || "").replace(/^ESTADO\s+/, ""));
+  if (!key || Number(key.substring(0, 4)) < MIN_VALID_YEAR) {
+    return "IGNORED: fecha invalida '" + data.timestamp + "'";
+  }
+  var sheet = ss.getSheetByName(STATUS_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(STATUS_SHEET_NAME, ss.getSheets().length);
+    var titles = STATUS_COLUMNS.map(function (c) { return c[0]; });
+    sheet.getRange(1, 1, 1, titles.length).setValues([titles]);
+    sheet.getRange(1, 1, 1, titles.length).setFontWeight("bold").setBackground("#202124").setFontColor("#FFFFFF");
+    sheet.setFrozenRows(1);
+  }
+  var headers = getHeaders_(sheet);
+  var row = headers.map(function (h) {
+    for (var i = 0; i < STATUS_COLUMNS.length; i++) {
+      if (STATUS_COLUMNS[i][0] === h) {
+        return i === 0 ? key : v_(data[STATUS_COLUMNS[i][1]], "");
+      }
+    }
+    return "";
+  });
+  sheet.appendRow(row);
+  return "SUCCESS";
 }
 
 function getConsoleSheet_(ss) {

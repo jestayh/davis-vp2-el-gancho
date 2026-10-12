@@ -85,7 +85,26 @@ def upload_to_google_sheets(script_url, data, timeout=12):
     for key in ("reset_cause", "destino"):
         if data.get(key):
             payload[key] = data[key]
+    return _post_json(script_url, payload, timeout)
 
+
+def upload_status(script_url, status, timestamp, timeout=12):
+    """
+    Daily health report of the ESP32 to the "Estado" tab. The "ESTADO " prefix makes an older
+    Apps Script reject it as an invalid date instead of writing it among the weather rows.
+    """
+    if not script_url:
+        return False
+    payload = dict(status)
+    payload["destino"] = "estado"
+    payload["timestamp"] = "ESTADO " + timestamp
+    return _post_json(script_url, payload, timeout)
+
+
+def _post_json(script_url, payload, timeout=12):
+    """POST payload as JSON to the Apps Script / proxy. Returns True on success."""
+    if not script_url or not (script_url.startswith("https://") or script_url.startswith("http://")):
+        return False
     try:
         if IS_ESP32:
             # High-efficiency single-socket TLS implementation for MicroPython

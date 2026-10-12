@@ -174,6 +174,26 @@ for (const [t, r] of [["00:10", 0.3], ["00:20", 0], ["00:30", 0.5], ["00:40", 0]
 check(get("2026-10-12 00:50:00")[cD] === 1.3, "acumulado del dia recuperado 1.3 (5 golpes) a las 00:50");
 check(get("2026-10-12 01:00:00")[cI] === 0.2, "al llenar el hueco, 01:00 recibe Lluvia Int 0.2");
 
+// ---------- daily ESP32 health report ----------
+const mainRowsBefore = main.rows.length;
+const status = { destino: "estado", timestamp: "ESTADO 2026-10-12 12:00:05", fw: "1.0.15", uptime_h: 13.2,
+                 reset_cause: "Watchdog", mem_free_kb: 61.5, mem_min_kb: 48.2, rssi: -67,
+                 err_console: 2, err_sheets: 0, err_wu: 1, recoveries: 1 };
+check(post(status) === "SUCCESS", "reporte de estado aceptado");
+const est = ss.getSheetByName("Estado");
+check(est && ss.getSheets()[ss.getSheets().length - 1] === est && ss.getSheets()[0] === main, "pestaña Estado creada al final");
+check(main.rows.length === mainRowsBefore, "el reporte no toca la hoja de datos");
+const ESTH = est.rows[0];
+const er = est.rows[1];
+check(er[0] === "2026-10-12 12:00:05" && er[ESTH.indexOf("Firmware")] === "1.0.15" &&
+      er[ESTH.indexOf("Último arranque")] === "Watchdog" && er[ESTH.indexOf("WiFi (dBm)")] === -67 &&
+      er[ESTH.indexOf("Fallas Sheets")] === 0, "columnas del reporte en su lugar");
+post(Object.assign({}, status, { timestamp: "ESTADO 2026-10-13 12:00:07", uptime_h: 37.2 }));
+check(est.rows.length === 3, "un reporte por fila");
+check(post(Object.assign({}, status, { timestamp: "ESTADO 2000-01-01 00:00:00" })).startsWith("IGNORED"), "reporte sin hora valida rechazado");
+post({ timestamp: "2026-10-11 13:20:00", temp_out_c: 10, rain_day_mm: 0.5, storm_rain_mm: 0.5, rain_month_mm: 70.5, rain_year_mm: 430.5 });
+check(!!get("2026-10-11 13:20:00"), "con la pestaña Estado, los datos siguen yendo a la hoja principal");
+
 // ---------- e-mail alerts ----------
 ctx.FAKE_NOW = "2026-10-12 01:40:00";
 ctx.activarAvisos();

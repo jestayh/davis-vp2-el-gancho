@@ -49,22 +49,37 @@ def _get_compass_point(deg):
     return sectors[idx]
 
 
-def _format_forecast(icon_code):
-    if icon_code is None:
-        return "Estable"
-    if (icon_code & 0x01) and (icon_code & 0x02):
-        return "[!] Lluvia/Nub"
-    if icon_code & 0x01:
-        return "[!] Lluvia"
-    if icon_code & 0x10:
-        return "[*] Nieve"
-    if icon_code & 0x02:
-        return "[~] Nublado"
-    if icon_code & 0x04:
-        return "[*~] Parcial"
-    if icon_code & 0x08:
-        return "[*] Despejado"
-    return "Estable"
+_MOON_NAMES = ("Nueva", "Creciente", "Cuarto crec", "Gibosa crec", "Llena", "Gibosa meng",
+               "Cuarto meng", "Menguante")
+
+
+def _days_from_civil(y, m, d):
+    """Days since 1970-01-01 (proleptic Gregorian), integer math only"""
+    y -= m <= 2
+    era = y // 400
+    yoe = y - era * 400
+    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + d - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
+def _moon_phase(date_str):
+    """Moon phase name for 'YYYY-MM-DD', from the mean synodic month and the new moon of 2000-01-06"""
+    try:
+        days = _days_from_civil(int(date_str[0:4]), int(date_str[5:7]), int(date_str[8:10])) + 0.5
+    except (ValueError, TypeError):
+        return None
+    age = (days - 10962.76) % 29.530589          # 10962.76 = 2000-01-06 18:14 UTC
+    return _MOON_NAMES[int(age / 29.530589 * 8 + 0.5) % 8]
+
+
+def _day_length(sunrise, sunset):
+    """'12h 46m' between two console times 'HH:MM'"""
+    try:
+        minutes = (int(sunset[:2]) * 60 + int(sunset[3:5])) - (int(sunrise[:2]) * 60 + int(sunrise[3:5]))
+    except (ValueError, TypeError):
+        return "--"
+    return "{}h {:02d}m".format(minutes // 60, minutes % 60) if minutes > 0 else "--"
 
 
 def _center(s, width=16):
@@ -101,9 +116,9 @@ _RAYS = ((10, 0), (7, 7), (0, 10), (-7, 7), (-10, 0), (-7, -7), (0, -10), (7, -7
 FORECAST_FRAMES = 10
 FORECAST_FRAME_MS = 90
 # Scrolling forecast message: pixels per second, and how long the card may take for one pass
-TICKER_PX_PER_S = 90
-TICKER_MIN_S = 3.5
-TICKER_MAX_S = 9.0
+TICKER_PX_PER_S = 45          # ~5-6 characters per second: readable at a glance
+TICKER_MIN_S = 5.0
+TICKER_MAX_S = 22.0           # the longest message (~100 characters) still runs at full speed
 
 # Davis forecast messages (console byte "forecast rule", 0-196), rebuilt in Spanish from short
 # pieces to keep RAM low. Source: Davis rule table published by Ocean Controls (KTA-282).
@@ -690,16 +705,16 @@ class WeatherDisplay:
             ]
 
         elif card == "sol":
-            # SOL & PRONOSTICO DAVIS
-            sr = data.get("sunrise") or "--:--"
-            ss = data.get("sunset") or "--:--"
-            f_desc = _format_forecast(data.get("forecast_icons"))
+            # SOL Y LUNA (the forecast has its own animated card)
+            sr = str(data.get("sunrise") or "--:--")
+            ss = str(data.get("sunset") or "--:--")
+            moon = _moon_phase(str(data.get("timestamp") or "")) or "--"
 
-            return "SOL/PRON", [
-                "Salida:  " + str(sr)[:8],
-                "Puesta:  " + str(ss)[:8],
-                "Pronostico:",
-                "  " + f_desc[:14]
+            return "SOL/LUNA", [
+                "Salida: " + sr[:5],
+                "Puesta: " + ss[:5],
+                "Luz: " + _day_length(sr, ss),
+                "Luna: " + moon[:10]
             ]
 
         elif card == "sistema":

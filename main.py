@@ -27,9 +27,10 @@ from src.davis_reader import (
 from src.weather_underground import upload
 from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailyStats
 from src.display import WeatherDisplay, WAKE_SECONDS
-from src.google_sheets import upload_to_google_sheets
+from src.google_sheets import upload_to_google_sheets, upload_status
 import src.google_sheets as gsheets
 from src import watchdog
+from src.health import Health
 import config as _config
 
 # Optional settings (defaults apply when an older config.py on the device lacks them)
@@ -332,6 +333,7 @@ def main(max_cycles=None):
     if reset_cause:
         log("Causa del arranque: {}".format(reset_cause))
     display.set_system_info(fw=installed_fw, reset=reset_cause)
+    health = Health(fw=installed_fw, reset_cause=reset_cause)
     if not clock_is_valid():
         log("[RELOJ] Sin hora valida (NTP sin internet): no se registrara nada hasta sincronizar")
 
@@ -414,6 +416,8 @@ def main(max_cycles=None):
 
                 if wu_due:
                     fresh = query_station(DAVIS_HOST, DAVIS_PORT, timeout=SOCKET_TIMEOUT_SECONDS)
+                    if not fresh:
+                        health.err_console += 1
                     if fresh:
                         data = fresh
                         cur_t = data.get("temp_out_c")
@@ -437,6 +441,8 @@ def main(max_cycles=None):
                 # 2. Weather Underground Upload (every WU_UPLOAD_INTERVAL_SECONDS)
                 if wu_due:
                     uploaded_wu = upload(WU_STATION_ID, WU_API_KEY, data, timeout=SOCKET_TIMEOUT_SECONDS)
+                    if not uploaded_wu:
+                        health.err_wu += 1
                     last_wu_upload_time = current_time
                     display.update_cloud_status(wu_ok=uploaded_wu, timestamp_str=data.get("timestamp"))
                     if uploaded_wu:
@@ -531,6 +537,8 @@ def main(max_cycles=None):
                                     ts = record_data["timestamp"]
                                     gap_until = (int(ts[0:4]), int(ts[5:7]), int(ts[8:10]), int(ts[11:13]), int(ts[14:16]))
                                 gap_done, gap_progress = run_gap_recovery(gap_until)
+                                if gap_progress:
+                                    health.recoveries += 1
                                 if not gap_done and not gap_progress:
                                     gap_failures += 1
                                     if gap_failures >= GAP_RECOVERY_MAX_FAILURES:
@@ -549,6 +557,12 @@ def main(max_cycles=None):
                                 if backfill_pending and run_console_backfill():
                                     backfill_pending = False
 
+                                # Health report to the "Estado" tab: right after boot, then daily
+                                if health.due() and upload_status(GOOGLE_APPS_SCRIPT_URL, health.report(),
+                                                                  format_timestamp_local()):
+                                    log("[ESTADO] Reporte diario enviado")
+                                    health.sent()
+
                             # The Sheets proxy announces the latest published firmware: update without waiting a day
                             fw_hint = gsheets.FW_HINT
                             if IS_ESP32 and fw_hint and fw_hint != installed_fw and time.time() >= next_hint_ota_check:
@@ -557,6 +571,7 @@ def main(max_cycles=None):
                                 run_ota_check()
                         else:
                             # Internet outage: nothing is queued in RAM; the console archive is the buffer
+                            health.err_sheets += 1
                             check_gap = True
                             gap_until = None
                             log("[DRIVE] Sin internet. Se recuperara desde la consola cuando vuelva la conexion")
@@ -598,6 +613,9 @@ def main(max_cycles=None):
                     gc.collect()
                 except Exception:
                     pass
+
+            # Uptime and lowest free RAM for the daily health report
+            health.tick()
 
             # Update status LED timer (ensures 20s solid light turns off accurately)
             display.check_led_timer()

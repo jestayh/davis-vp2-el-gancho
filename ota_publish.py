@@ -24,6 +24,7 @@ FILES_TO_COMPILE = [
     ("src/history_recovery.py", "src/history_recovery.mpy"),
     ("src/ota_updater.py", "src/ota_updater.mpy"),
     ("src/watchdog.py", "src/watchdog.mpy"),
+    ("src/health.py", "src/health.mpy"),
 ]
 
 

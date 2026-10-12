@@ -112,7 +112,7 @@ def test_format_age():
 def test_rotation_alternates_big_temperature_and_forecast(screen, clock):
     titles = [show(screen, clock, "14:%02d" % i, WEATHER).header()[0][0] for i in range(12)]
     assert titles[0::2] == ["AHORA", "PRONOST."] * 3
-    assert titles[1::2] == ["EXTERIOR", "VIENTO", "SOL/PRON", "SISTEMA", "SUBIDAS", "EXTERIOR"]
+    assert titles[1::2] == ["EXTERIOR", "VIENTO", "SOL/LUNA", "SISTEMA", "SUBIDAS", "EXTERIOR"]
 
 
 def test_rain_card_only_while_it_rains(screen, clock):
@@ -183,3 +183,25 @@ def test_forecast_message_scrolls_once_right_to_left(screen, clock, rule):
     assert not any(t[2] == 56 for t in oled.last_texts())       # ends off screen
     for px, texts in oled.frames:
         assert all(t[2] in (4, 20, 32, 44, 56) for t in texts)
+
+
+def test_sun_and_moon_card(screen, clock):
+    screen.card_index = dm._ROTATION.index("sol")
+    screen.last_card_title = "AHORA"
+    oled = show(screen, clock, "14:00", dict(WEATHER, sunrise="07:12", sunset="19:58"), day="2026-10-26")
+    lines = [t[0] for t in oled.last_texts() if t[2] > 4]
+    assert lines == ["Salida: 07:12", "Puesta: 19:58", "Luz: 12h 46m", "Luna: Llena"]
+    assert not any("[" in t[0] for t in oled.last_texts())       # no more bracket "icons"
+
+
+def test_moon_phase_on_known_dates():
+    assert dm._moon_phase("2024-04-08") == "Nueva"               # total solar eclipse
+    assert dm._moon_phase("2026-10-10") == "Nueva"
+    assert dm._moon_phase("2026-10-26") == "Llena"
+    assert dm._moon_phase("") is None and dm._day_length("--:--", "19:58") == "--"
+
+
+def test_longest_forecast_message_scrolls_at_reading_speed():
+    longest = max(len(dm.forecast_message(r)) for r in range(197))
+    assert (128 + 8 * longest) / dm.TICKER_PX_PER_S <= dm.TICKER_MAX_S
+    assert dm.TICKER_PX_PER_S <= 50                              # about 6 characters per second
