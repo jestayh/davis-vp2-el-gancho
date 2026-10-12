@@ -362,6 +362,29 @@ function readKeys_(sheet, tz) {
   return keys;
 }
 
+// Filas que se leen desde el final para ubicar un registro nuevo (~2,8 días de datos cada 10 min)
+var TAIL_ROWS = 400;
+// Filas anteriores que fillDerived_ necesita conocer (lluvia de las últimas 24 h, presión de hace 3 h)
+var CONTEXT_ROWS = 150;
+
+/**
+ * Como readKeys_, pero leyendo solo las últimas TAIL_ROWS filas cuando el registro va al final
+ * (lo normal: la hoja crece ~52.000 filas al año y leerla entera en cada envío la hacía lenta).
+ * Las posiciones no leídas quedan vacías (undefined). Si la fecha cae antes de la ventana, o tan
+ * cerca de su comienzo que faltarían filas previas para completar acumulados, lee la hoja entera.
+ */
+function readKeysNear_(sheet, tz, key) {
+  var n = sheet.getLastRow() - 1;
+  if (n <= TAIL_ROWS) return readKeys_(sheet, tz);
+  var offset = n - TAIL_ROWS;
+  var vals = sheet.getRange(offset + 2, 1, TAIL_ROWS, 1).getValues();
+  var keys = new Array(n);
+  for (var i = 0; i < TAIL_ROWS; i++) keys[offset + i] = keyOf_(vals[i][0], tz);
+  var guard = keys[offset + CONTEXT_ROWS];
+  if (!guard || key <= guard) return readKeys_(sheet, tz);
+  return keys;
+}
+
 // ---------------------------------------------------------------------------------------
 // Inserción ordenada sin duplicados
 // ---------------------------------------------------------------------------------------
@@ -372,7 +395,7 @@ function readKeys_(sheet, tz) {
  */
 function upsertRow_(sheet, headers, row, key, fillMissing) {
   var tz = sheet.getParent().getSpreadsheetTimeZone();
-  var keys = readKeys_(sheet, tz);
+  var keys = readKeysNear_(sheet, tz, key);
 
   // Posición: índice de la fila igual, o de la primera posterior (se busca desde el final)
   var pos = keys.length;

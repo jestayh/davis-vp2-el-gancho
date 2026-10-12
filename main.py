@@ -7,6 +7,37 @@ Unified Python implementation for both PC (CPython) and ESP32 (MicroPython)
 import sys
 import time
 
+
+def drop_stale_sources(folder="src"):
+    """
+    Remove src/<module>.py when src/<module>.mpy exists. MicroPython imports the .py before the
+    .mpy, and the first install copied several modules as .py: with them in place, the .mpy that
+    OTA updates install would never load. Returns the removed file names.
+    """
+    import os
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    removed = []
+    for name in names:
+        if name.endswith(".py") and name[:-3] + ".mpy" in names:
+            try:
+                os.remove(folder + "/" + name)
+                removed.append(name)
+            except OSError:
+                pass
+    return removed
+
+
+# Before importing any src module, so this boot already loads the updated bytecode
+if sys.platform == "esp32":
+    _stale = drop_stale_sources()
+    if _stale:
+        print("[OTA] Fuentes antiguas eliminadas (ocultaban la version nueva): {}".format(_stale))
+        import machine
+        machine.reset()
+
 from config import (
     DAVIS_HOST, DAVIS_PORT,
     WU_STATION_ID, WU_API_KEY,
@@ -27,7 +58,12 @@ from src.davis_reader import (
 from src.weather_underground import upload
 from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailyStats
 from src.display import WeatherDisplay, WAKE_SECONDS
-from src.google_sheets import upload_to_google_sheets, upload_status
+from src.google_sheets import upload_to_google_sheets
+try:
+    from src.google_sheets import upload_status
+except ImportError:      # an outdated google_sheets module must never stop the station
+    def upload_status(*args, **kwargs):
+        return False
 import src.google_sheets as gsheets
 from src import watchdog
 from src.health import Health

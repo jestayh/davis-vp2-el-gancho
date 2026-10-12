@@ -5,6 +5,7 @@ const vm = require("vm");
 class Range {
   constructor(sh, r, c, nr, nc) { Object.assign(this, { sh, r, c, nr: nr || 1, nc: nc || 1 }); }
   getValues() {
+    this.sh.ss.cellsRead = (this.sh.ss.cellsRead || 0) + this.nr * this.nc;
     const out = [];
     for (let i = 0; i < this.nr; i++) {
       const row = this.sh.rows[this.r - 1 + i] || [];

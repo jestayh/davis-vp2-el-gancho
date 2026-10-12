@@ -25,6 +25,9 @@ FILES_TO_COMPILE = [
     ("src/ota_updater.py", "src/ota_updater.mpy"),
     ("src/watchdog.py", "src/watchdog.mpy"),
     ("src/health.py", "src/health.mpy"),
+    # Copied as .py at the first install and never updated remotely until 2026-10-12
+    ("src/weather_underground.py", "src/weather_underground.mpy"),
+    ("src/ssd1306.py", "src/ssd1306.mpy"),
 ]
 
 

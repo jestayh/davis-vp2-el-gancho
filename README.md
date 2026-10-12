@@ -157,17 +157,19 @@ mpy-cross -O2 src/display.py -o src/display.mpy
 ```
 
 ### 2. Carga a la Placa vía `mpremote`
+Solo el lanzador y `config.py` van como `.py`; el resto, como `.mpy` (los que publica `ota_publish.py`).
+MicroPython carga un `.py` antes que el `.mpy` del mismo nombre: un `.py` olvidado en `src/` ocultaría
+las actualizaciones OTA (desde la v1.0.16 la aplicación los borra sola al arrancar).
+
 ```bash
-mpremote connect COM3 cp launcher.py :main.py
-mpremote connect COM3 cp app.mpy :app.mpy
+mpremote connect COM3 cp device/main.py :main.py
 mpremote connect COM3 cp config.py :config.py
-mpremote connect COM3 cp src/display.mpy :src/display.mpy
-mpremote connect COM3 cp src/davis_reader.py :src/davis_reader.py
-mpremote connect COM3 cp src/weather_underground.py :src/weather_underground.py
-mpremote connect COM3 cp src/google_sheets.py :src/google_sheets.py
-mpremote connect COM3 cp src/data_logger.py :src/data_logger.py
-mpremote connect COM3 cp src/ssd1306.py :src/ssd1306.py
-mpremote connect COM3 cp src/ota_updater.py :src/ota_updater.py
+mpremote connect COM3 cp app.mpy :app.mpy
+mpremote connect COM3 cp src/display.mpy :src/display.mpy + cp src/davis_reader.mpy :src/davis_reader.mpy
+mpremote connect COM3 cp src/data_logger.mpy :src/data_logger.mpy + cp src/google_sheets.mpy :src/google_sheets.mpy
+mpremote connect COM3 cp src/history_recovery.mpy :src/history_recovery.mpy + cp src/ota_updater.mpy :src/ota_updater.mpy
+mpremote connect COM3 cp src/watchdog.mpy :src/watchdog.mpy + cp src/health.mpy :src/health.mpy
+mpremote connect COM3 cp src/weather_underground.mpy :src/weather_underground.mpy + cp src/ssd1306.mpy :src/ssd1306.mpy
 mpremote connect COM3 reset
 ```
 

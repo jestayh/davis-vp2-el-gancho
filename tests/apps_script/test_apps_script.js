@@ -15,7 +15,7 @@ const post = (obj) => ctx.doPost({ postData: { contents: JSON.stringify(obj) } }
 const key = (v) => ctx.normalizeKey_(String(v));
 const r1 = (x) => Math.round(x * 10) / 10;
 
-// ---------- synthetic history: 07-oct 00:00 to 11-oct 12:00, every 10 min ----------
+// ---------- synthetic history: 01-sep 00:00 to 11-oct 12:00, every 10 min (~5.900 rows) ----------
 const tmp = new Sheet(ss, "tmp");
 ctx.createHeaders(tmp);
 const HEADERS = tmp.rows[0].slice(0, 41);          // sheet created before the "Reinicio" column existed
@@ -24,14 +24,16 @@ const CLICK = 0.254;
 
 const truth = {};                                  // key -> row (what the console measured)
 const order = [];
-let dayClicks = 0, monthClicks = Math.round(60 / CLICK), yearClicks = Math.round(410 / CLICK), lastDay = null;
-for (let i = 0, t = ctx.keyMinutes_("2026-10-07 00:00:00"); t <= ctx.keyMinutes_("2026-10-11 12:00:00"); i++, t += 10) {
-  const k = ctx.shiftKey_("2026-10-07 00:00:00", t - ctx.keyMinutes_("2026-10-07 00:00:00"));
+let dayClicks = 0, monthClicks = 0, yearClicks = Math.round(350 / CLICK), lastDay = null, lastMonth = null;
+for (let i = 0, t = ctx.keyMinutes_("2026-09-01 00:00:00"); t <= ctx.keyMinutes_("2026-10-11 12:00:00"); i++, t += 10) {
+  const k = ctx.shiftKey_("2026-09-01 00:00:00", t - ctx.keyMinutes_("2026-09-01 00:00:00"));
   const day = k.substring(0, 10);
   if (day !== lastDay) { dayClicks = 0; lastDay = day; }
+  if (day.substring(0, 7) !== lastMonth) { monthClicks = 0; lastMonth = day.substring(0, 7); }
   const minuteOfDay = Number(k.substring(11, 13)) * 60 + Number(k.substring(14, 16));
-  // Rain on 08-oct afternoon/evening: one bucket tip every 30 min
-  const rains = day === "2026-10-08" && minuteOfDay >= 12 * 60 && minuteOfDay % 30 === 0 ? 1 : 0;
+  // Rain on 08-oct afternoon/evening (one bucket tip every 30 min) and some September days
+  const rainyDay = day === "2026-10-08" || day === "2026-09-14" || day === "2026-09-30";
+  const rains = rainyDay && minuteOfDay >= 12 * 60 && minuteOfDay % 30 === 0 ? 1 : 0;
   dayClicks += rains; monthClicks += rains; yearClicks += rains;
   const row = new Array(41).fill("");
   const temp = r1(12 + 6 * Math.sin(2 * Math.PI * (minuteOfDay - 600) / 1440));
@@ -77,21 +79,26 @@ const get = (k) => rowsFor(main, k)[0];
 
 // ---------- doPost ----------
 const n0 = main.rows.length;
+ss.cellsRead = 0;
+post({ timestamp: "2026-10-11 12:10:00", temp_out_c: 17, rain_interval_mm: 0, barometer_trend: "Estable",
+       rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 10.2, rain_year_mm: 421 });   // a normal live row
+check(ss.cellsRead < 2000, "registro al final: lee solo el final de la hoja (" + ss.cellsRead + " celdas de " + n0 + " filas)");
+const n1 = main.rows.length;
 check(post({ timestamp: "2000-01-01 00:20:00", temp_out_c: 9 }).startsWith("IGNORED"), "fecha 2000 rechazada");
-check(main.rows.length === n0, "no agrega filas invalidas");
+check(main.rows.length === n1, "no agrega filas invalidas");
 check(post({ timestamp: "2026-10-11 13:00:00", temp_out_c: 18, wind_speed_kmh: 3.2, wind_samples: 225, wind_tx: 1,
-             rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 61.0, rain_year_mm: 411, reset_cause: "Encendido",
+             rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 10.2, rain_year_mm: 421, reset_cause: "Encendido",
              barometer_trend: "Estable" }) === "SUCCESS", "fila normal SUCCESS");
 const H = main.rows[0];
 check(H[H.length - 1] === "Reinicio", "columna Reinicio agregada");
 const r1300 = get("2026-10-11 13:00:00");
 check(r1300[H.indexOf("Muestras Viento")] === 225 && r1300[H.indexOf("Tx Viento")] === 1, "Muestras y Tx en sus columnas (no la velocidad)");
 check(r1300[H.indexOf("Reinicio")] === "Encendido", "Reinicio = Encendido");
-post({ timestamp: "2026-10-11 13:00:00", temp_out_c: 18.5, rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 61.0, rain_year_mm: 411 });
+post({ timestamp: "2026-10-11 13:00:00", temp_out_c: 18.5, rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 10.2, rain_year_mm: 421 });
 check(rowsFor(main, "2026-10-11 13:00:00").length === 1 && get("2026-10-11 13:00:00")[1] === 18.5, "fecha repetida reemplaza, no duplica");
-post({ timestamp: "2026-10-11 12:30:00", temp_out_c: 17.4, rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 61.0, rain_year_mm: 411 });
+post({ timestamp: "2026-10-11 12:30:00", temp_out_c: 17.4, rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 10.2, rain_year_mm: 421 });
 const i1230 = main.rows.findIndex((r) => key(r[0]) === "2026-10-11 12:30:00");
-check(key(main.rows[i1230 - 1][0]) === "2026-10-11 12:00:00" && key(main.rows[i1230 + 1][0]) === "2026-10-11 13:00:00",
+check(key(main.rows[i1230 - 1][0]) === "2026-10-11 12:10:00" && key(main.rows[i1230 + 1][0]) === "2026-10-11 13:00:00",
       "fila atrasada insertada en su lugar");
 
 // ---------- console backfill: console clock 3 h behind ----------
@@ -141,7 +148,7 @@ check(get("2026-10-08 15:00:00")[iS] === 223, "muestras reales conservadas");
 const keys = main.rows.slice(1).map((r) => key(r[0]));
 check(keys.every((k, i) => i === 0 || keys[i - 1] < k), "hoja ordenada y sin fechas repetidas (" + keys.length + " filas)");
 let daySumOk = true;
-for (const day of ["2026-10-07", "2026-10-08", "2026-10-09"]) {
+for (const day of ["2026-09-14", "2026-09-30", "2026-10-07", "2026-10-08", "2026-10-09"]) {
   const rows = main.rows.slice(1).filter((r) => key(r[0]).startsWith(day));
   const sum = r1(rows.reduce((s, r) => s + (Number(r[c("Lluvia Int (mm)")]) || 0), 0));
   const dayTotal = rows[rows.length - 1][c("Lluvia Día (mm)")];

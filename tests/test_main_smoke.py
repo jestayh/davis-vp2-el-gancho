@@ -52,3 +52,13 @@ def test_main_loop_logs_uploads_and_reports(app):
     assert len(calls["status"]) == 1
     status, ts = calls["status"][0]
     assert status["fw"] and status["err_console"] == 0 and ts[:4] == "2026"
+
+
+def test_stale_py_next_to_mpy_is_removed(tmp_path):
+    import main
+    for name in ("google_sheets.py", "google_sheets.mpy", "health.mpy", "__init__.py", "config_like.py"):
+        (tmp_path / name).write_text("x")
+    removed = main.drop_stale_sources(str(tmp_path))
+    assert removed == ["google_sheets.py"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["__init__.py", "config_like.py", "google_sheets.mpy", "health.mpy"]
+    assert main.drop_stale_sources(str(tmp_path / "missing")) == []

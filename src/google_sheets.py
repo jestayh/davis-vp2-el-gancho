@@ -155,7 +155,8 @@ def _post_json(script_url, payload, timeout=12):
             ai = socket.getaddrinfo(host, port)
             addr = ai[0][-1]
             s = socket.socket()
-            s.settimeout(10)
+            # The proxy now answers only after Google stored the row (~2-6 s, more if busy)
+            s.settimeout(20)
             s.connect(addr)
 
             if is_ssl:
