@@ -96,6 +96,42 @@ _ROTATION = ("ahora", "exterior", "ahora", "viento", "ahora", "lluvia",
              "ahora", "sol", "ahora", "sistema", "ahora", "subidas")
 _RESET_SHORT = {"Reset hardware": "Reset HW", "Reinicio software": "Reset SW"}
 
+# Sun rays: unit directions x10 (integer math)
+_RAYS = ((10, 0), (7, 7), (0, 10), (-7, 7), (-10, 0), (-7, -7), (0, -10), (7, -7))
+FORECAST_FRAMES = 10
+FORECAST_FRAME_MS = 90
+
+
+def _forecast_kind(icons, night):
+    """(icon kind, label) from the Davis forecast icon bits: 1 rain, 2 cloud, 4 partly cloudy, 8 sun, 16 snow"""
+    if icons is None:
+        return None, "Sin dato"
+    if icons & 0x01 and icons & 0x10:
+        return "aguanieve", "Lluv+Niv"
+    if icons & 0x10:
+        return "nieve", "Nieve"
+    if icons & 0x01:
+        return "lluvia", "Lluvia"
+    if icons & 0x04:
+        return "parcial", "Parcial"
+    if icons & 0x02:
+        return "nublado", "Nublado"
+    if icons & 0x08:
+        return "sol", "Despej." if night else "Soleado"
+    return None, "Sin dato"
+
+
+def _is_dark(now_str, data):
+    """Before sunrise or after sunset (console times "HH:MM"); falls back to 20:00-07:00"""
+    if not now_str or now_str[:4] < "2025":
+        return False
+    hm = now_str[11:16]
+    rise = str(data.get("sunrise") or "07:00")
+    sset = str(data.get("sunset") or "20:00")
+    if len(rise) != 5 or len(sset) != 5:
+        rise, sset = "07:00", "20:00"
+    return hm < rise or hm >= sset
+
 
 def _is_night(hour):
     if NIGHT_START_HOUR > NIGHT_END_HOUR:
@@ -139,6 +175,7 @@ class WeatherDisplay:
         self.fw_version = None
         self.reset_cause = None
         self.iss_recept = None
+        self._forecast_turn = True    # the first "ahora" shows the big temperature
 
         if not IS_ESP32:
             return
@@ -401,7 +438,7 @@ class WeatherDisplay:
             self.card_index = (self.card_index + 1) % len(_ROTATION)
             if card == "lluvia" and not (data.get("rain_rate_mm_per_hr") or data.get("rain_day_mm")):
                 continue
-            if card == "ahora" and self.last_card_title == "AHORA":
+            if card == "ahora" and self.last_card_title in ("AHORA", "PRONOST."):
                 continue
             return card
         return "ahora"
@@ -442,6 +479,80 @@ class WeatherDisplay:
             if w_spd > 0 and w_dir is not None:
                 bottom += " " + _get_compass_point(w_dir)
         self.oled.text(_center(bottom), 0, 52, 1)
+
+    # --- Forecast icons (drawn with framebuf primitives, animated a few frames) ---
+
+    def _disc(self, cx, cy, r, c):
+        for dy in range(-r, r + 1):
+            dx = int((r * r - dy * dy) ** 0.5)
+            self.oled.hline(cx - dx, cy + dy, 2 * dx + 1, c)
+
+    def _sun(self, cx, cy, r, frame):
+        self._disc(cx, cy, r, 1)
+        ray = 3 if frame % 2 else 5                      # pulsing rays
+        for dx, dy in _RAYS:
+            x0 = cx + dx * (r + 2) // 10
+            y0 = cy + dy * (r + 2) // 10
+            self.oled.line(x0, y0, x0 + dx * ray // 10, y0 + dy * ray // 10, 1)
+
+    def _moon(self, cx, cy, frame):
+        self._disc(cx, cy, 9, 1)
+        self._disc(cx + 5, cy - 3, 8, 0)                 # crescent
+        for i, (sx, sy) in enumerate(((cx + 14, cy - 8), (cx + 17, cy + 4), (cx - 14, cy - 9))):
+            if (frame + i) % 3:                          # twinkling stars
+                self.oled.pixel(sx, sy, 1)
+                if (frame + i) % 3 == 1:
+                    self.oled.hline(sx - 1, sy, 3, 1)
+                    self.oled.vline(sx, sy - 1, 3, 1)
+
+    def _cloud(self, cx, cy):
+        # Black margin first so a cloud in front of the sun/moon keeps its outline
+        for c, grow in ((0, 2), (1, 0)):
+            self._disc(cx - 8, cy + 2, 7 + grow, c)
+            self._disc(cx + 1, cy - 3, 9 + grow, c)
+            self._disc(cx + 10, cy + 2, 7 + grow, c)
+            self.oled.fill_rect(cx - 8, cy + 2 - grow, 18, 8 + 2 * grow, c)
+
+    def _draw_icon(self, kind, night, frame, cx=28, cy=38):
+        drift = (0, 1, 2, 1)[frame % 4]                  # clouds sway slowly
+        if kind == "sol":
+            if night:
+                self._moon(cx, cy, frame)
+            else:
+                self._sun(cx, cy, 8, frame)
+        elif kind == "parcial":
+            if night:
+                self._moon(cx + 4, cy - 10, frame)
+                self._cloud(cx - 5 + drift, cy + 9)
+            else:
+                self._sun(cx + 7, cy - 8, 6, frame)
+                self._cloud(cx - 3 + drift, cy + 6)
+        elif kind == "nublado":
+            self._cloud(cx + 6 - drift, cy - 6)
+            self._cloud(cx - 4 + drift, cy + 4)
+        else:
+            # Rain and/or snow under a cloud, falling a little each frame
+            self._cloud(cx + drift - 1, cy - 4)
+            for i in range(5):
+                x = cx - 11 + 5 * i
+                y = cy + 10 + (frame * 3 + i * 5) % 11
+                if kind == "nieve" or (kind == "aguanieve" and i % 2):
+                    self.oled.fill_rect(x, y, 2, 2, 1)
+                else:
+                    self.oled.vline(x, y, 4, 1)
+
+    def _draw_forecast_card(self, data, night, frame):
+        """Animated Davis forecast icon on the left; forecast, temperature and humidity on the right"""
+        kind, label = _forecast_kind(data.get("forecast_icons"), night)
+        if kind:
+            self._draw_icon(kind, night, frame)
+        else:
+            self.oled.text("?", 24, 34, 1)
+        t_out = data.get("temp_out_c")
+        h_out = data.get("humidity_out")
+        self.oled.text(label[:8], 62, 22, 1)
+        self.oled.text("{:.1f}C".format(t_out) if t_out is not None else "--.-C", 62, 38, 1)
+        self.oled.text("{}%".format(h_out) if h_out is not None else "--%", 62, 52, 1)
 
     def _get_card_content(self, card, data):
         """Return (card_title, [line1, line2, line3, line4]) for a text card"""
@@ -558,7 +669,9 @@ class WeatherDisplay:
 
             card = self._next_card(data)
             if card == "ahora":
-                card_title, lines = "AHORA", None
+                # Every other time, the animated forecast instead of the big temperature
+                self._forecast_turn = not self._forecast_turn
+                card_title, lines = ("PRONOST." if self._forecast_turn else "AHORA"), None
             else:
                 card_title, lines = self._get_card_content(card, data)
 
@@ -568,6 +681,20 @@ class WeatherDisplay:
                 self.last_card_lines = None  # gentle entrance when the screen comes back on
                 return
             self._set_power(True, CONTRAST_NIGHT if night else CONTRAST_DAY)
+
+            if lines is None and card_title == "PRONOST.":
+                dark = _is_dark(now_str, data)
+                for frame in range(FORECAST_FRAMES):
+                    self.oled.fill(0)
+                    self._draw_header(left, right, alert)
+                    self._draw_forecast_card(data, dark, frame)
+                    self.oled.show()
+                    if frame < FORECAST_FRAMES - 1:
+                        _sleep_ms(FORECAST_FRAME_MS)
+                self.last_card_lines = None
+                self.last_card_title = card_title
+                self.check_led_timer()
+                return
 
             if lines is None:
                 # Big-number card: drawn at once; the next text card slides in gently
