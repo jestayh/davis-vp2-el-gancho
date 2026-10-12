@@ -100,6 +100,79 @@ _RESET_SHORT = {"Reset hardware": "Reset HW", "Reinicio software": "Reset SW"}
 _RAYS = ((10, 0), (7, 7), (0, 10), (-7, 7), (-10, 0), (-7, -7), (0, -10), (7, -7))
 FORECAST_FRAMES = 10
 FORECAST_FRAME_MS = 90
+# Scrolling forecast message: pixels per second, and how long the card may take for one pass
+TICKER_PX_PER_S = 90
+TICKER_MIN_S = 3.5
+TICKER_MAX_S = 9.0
+
+# Davis forecast messages (console byte "forecast rule", 0-196), rebuilt in Spanish from short
+# pieces to keep RAM low. Source: Davis rule table published by Ocean Controls (KTA-282).
+_FC_PIECES = {
+    "A": "Despejado y mas frio.",
+    "B": "Despejado, temp. estable.",
+    "C": "Despejado por 12 h, temp. estable.",
+    "D": "Despejado de 12 a 24 h y mas frio.",
+    "E": "Parcialmente nublado y mas frio.",
+    "F": "Parcialmente nublado, temp. estable.",
+    "G": "Despejado y mas calido.",
+    "H": "Nubes en aumento y mas calido.",
+    "I": "Nubes en aumento, temp. estable.",
+    "J": "Nubes en aumento y mas frio.",
+    "K": "Despejando y mas frio.",
+    "L": "Nublado y mas frio.",
+    "M": "Nublado, temp. estable.",
+    "N": "Despejando, mas frio y ventoso.",
+    "a": "Lluvia posible en 6 h.",
+    "b": "Lluvia posible en 6 a 12 h.",
+    "c": "Lluvia posible en 12 h.",
+    "d": "Lluvia posible en 12 a 24 h.",
+    "e": "Lluvia posible en 24 h.",
+    "f": "Lluvia posible en 24 a 48 h.",
+    "g": "Lluvia posible en 48 h.",
+    "h": "Lluvia probable.",
+    "i": "Lluvia continua.",
+    "j": "Lluvia termina en 6 h.",
+    "k": "Lluvia termina en 12 h.",
+    "l": "Lluvia termina en 12 a 24 h.",
+    "m": "A ratos intensa.",
+    "n": "Lluvia a ratos intensa, termina en 12 h.",
+    "o": "Lluvia y viento posibles en 6 h.",
+    "w": "Viento en aumento.",
+    "x": "Ventoso.",
+    "y": "Posible giro del viento al O/NO/N.",
+    "z": "Ventoso, posible giro al O/NO/N.",
+    "X": "Pronostico requiere 3 h de datos.",
+}
+# Rule number -> pieces (index = rule number, 0 to 196)
+_FC_RULES = (
+    "A,B,C,D,B,E,F,F,G,F,"          # 0-9
+    "F,B,Hf,F,B,Ie,B,F,B,Ic,"       # 10-19
+    "B,F,B,He,Gw,F,B,Hcw,Gw,H,"     # 20-29
+    "F,B,Hcw,Gw,H,F,B,Hcw,F,B,"     # 30-39
+    "Gg,G,F,B,If,I,F,B,Hd,F,"       # 40-49
+    "B,Hdx,F,B,Hdx,F,B,Hb,F,B,"     # 50-59
+    "Hbx,F,B,Hdx,F,B,Hc,F,B,Hh,"    # 60-69
+    "Kj,F,Kj,B,Kj,E,F,A,Kj,B,"      # 70-79
+    "Kj,A,F,B,Ie,Li,F,B,Lh,Mi,"     # 80-89
+    "Mh,F,B,Jo,Io,Liw,F,B,Lhw,Miw," # 90-99
+    "Mhw,F,B,Jdy,Idy,F,B,Jay,Iay,Lky,"  # 100-109
+    "Ly,Mky,My,Lky,F,B,Ley,Mky,Mey,Nj,"  # 110-119
+    "N,Ljz,Lz,N,F,B,Mcx,F,B,Jcmx,"  # 120-129
+    "Ljx,F,B,Lcx,Ll,L,Limx,F,B,Lbx," # 130-139
+    "Mimx,F,B,Mbx,F,B,Icmx,Lx,Limx,F,"  # 140-149
+    "B,Lhmx,Mimx,Mhmx,F,B,Jax,Iax,Jiz,F,"  # 150-159
+    "B,Lhz,Miz,Mhz,Jaz,F,B,Jay,Iaz,Iay,"  # 160-169
+    "F,B,Jaz,Iaz,F,B,Jdz,Idz,Lnz,F,"  # 170-179
+    "B,Lbmz,Mkz,Mbmz,Li,F,B,Lhz,Mi,Mh,"  # 180-189
+    "F,B,Lcmx,X,A,A,A"              # 190-196
+).split(",")
+
+
+def forecast_message(rule):
+    """Spanish forecast message for a Davis forecast rule number (None if unknown)"""
+    if rule is None or not 0 <= rule < len(_FC_RULES):
+        return None
+    return " ".join(_FC_PIECES[p] for p in _FC_RULES[rule])
 
 
 def _forecast_kind(icons, night):
@@ -513,7 +586,8 @@ class WeatherDisplay:
             self._disc(cx + 10, cy + 2, 7 + grow, c)
             self.oled.fill_rect(cx - 8, cy + 2 - grow, 18, 8 + 2 * grow, c)
 
-    def _draw_icon(self, kind, night, frame, cx=28, cy=38):
+    def _draw_icon(self, kind, night, frame, cx=28, cy=34):
+        # Fits between the header line (y=14) and the ticker row (y=56)
         drift = (0, 1, 2, 1)[frame % 4]                  # clouds sway slowly
         if kind == "sol":
             if night:
@@ -522,37 +596,44 @@ class WeatherDisplay:
                 self._sun(cx, cy, 8, frame)
         elif kind == "parcial":
             if night:
-                self._moon(cx + 4, cy - 10, frame)
-                self._cloud(cx - 5 + drift, cy + 9)
+                self._moon(cx + 4, cy - 9, frame)
+                self._cloud(cx - 5 + drift, cy + 8)
             else:
-                self._sun(cx + 7, cy - 8, 6, frame)
+                self._sun(cx + 7, cy - 6, 6, frame)
                 self._cloud(cx - 3 + drift, cy + 6)
         elif kind == "nublado":
-            self._cloud(cx + 6 - drift, cy - 6)
+            self._cloud(cx + 6 - drift, cy - 4)
             self._cloud(cx - 4 + drift, cy + 4)
         else:
             # Rain and/or snow under a cloud, falling a little each frame
             self._cloud(cx + drift - 1, cy - 4)
             for i in range(5):
                 x = cx - 11 + 5 * i
-                y = cy + 10 + (frame * 3 + i * 5) % 11
+                y = cy + 10 + (frame * 3 + i * 5) % 7
                 if kind == "nieve" or (kind == "aguanieve" and i % 2):
                     self.oled.fill_rect(x, y, 2, 2, 1)
                 else:
                     self.oled.vline(x, y, 4, 1)
 
-    def _draw_forecast_card(self, data, night, frame):
-        """Animated Davis forecast icon on the left; forecast, temperature and humidity on the right"""
+    def _draw_forecast_card(self, data, night, frame, ticker=None, ticker_x=0):
+        """Animated Davis forecast icon on the left; forecast, temperature and humidity on the right;
+        the console's forecast message scrolls along the bottom row"""
         kind, label = _forecast_kind(data.get("forecast_icons"), night)
         if kind:
             self._draw_icon(kind, night, frame)
         else:
-            self.oled.text("?", 24, 34, 1)
+            self.oled.text("?", 24, 30, 1)
         t_out = data.get("temp_out_c")
         h_out = data.get("humidity_out")
-        self.oled.text(label[:8], 62, 22, 1)
-        self.oled.text("{:.1f}C".format(t_out) if t_out is not None else "--.-C", 62, 38, 1)
-        self.oled.text("{}%".format(h_out) if h_out is not None else "--%", 62, 52, 1)
+        self.oled.text(label[:8], 62, 20, 1)
+        self.oled.text("{:.1f}C".format(t_out) if t_out is not None else "--.-C", 62, 32, 1)
+        self.oled.text("{}%".format(h_out) if h_out is not None else "--%", 62, 44, 1)
+        if ticker:
+            # framebuf clips text drawn partly off-screen: only the visible slice is passed
+            first = max(0, -ticker_x // 8)
+            visible = ticker[first:first + 17]
+            if visible:
+                self.oled.text(visible, ticker_x + 8 * first, 56, 1)
 
     def _get_card_content(self, card, data):
         """Return (card_title, [line1, line2, line3, line4]) for a text card"""
@@ -684,13 +765,32 @@ class WeatherDisplay:
 
             if lines is None and card_title == "PRONOST.":
                 dark = _is_dark(now_str, data)
-                for frame in range(FORECAST_FRAMES):
-                    self.oled.fill(0)
-                    self._draw_header(left, right, alert)
-                    self._draw_forecast_card(data, dark, frame)
-                    self.oled.show()
-                    if frame < FORECAST_FRAMES - 1:
-                        _sleep_ms(FORECAST_FRAME_MS)
+                ticker = forecast_message(data.get("forecast_rule"))
+                if ticker:
+                    # One full pass of the message, right to left; the icon animates meanwhile
+                    travel = 128 + 8 * len(ticker)
+                    duration = min(TICKER_MAX_S, max(TICKER_MIN_S, travel / TICKER_PX_PER_S))
+                    t0 = _ticks()
+                    while True:
+                        elapsed = _since_s(t0)
+                        done = elapsed >= duration
+                        pos = travel if done else int(travel * elapsed / duration)
+                        self.oled.fill(0)
+                        self._draw_header(left, right, alert)
+                        self._draw_forecast_card(data, dark, int(elapsed * 1000) // FORECAST_FRAME_MS,
+                                                 ticker, 128 - pos)
+                        self.oled.show()
+                        if done:
+                            break
+                        _sleep_ms(10)
+                else:
+                    for frame in range(FORECAST_FRAMES):
+                        self.oled.fill(0)
+                        self._draw_header(left, right, alert)
+                        self._draw_forecast_card(data, dark, frame)
+                        self.oled.show()
+                        if frame < FORECAST_FRAMES - 1:
+                            _sleep_ms(FORECAST_FRAME_MS)
                 self.last_card_lines = None
                 self.last_card_title = card_title
                 self.check_led_timer()
