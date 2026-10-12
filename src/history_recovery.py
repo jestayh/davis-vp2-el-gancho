@@ -47,15 +47,22 @@ ARCHIVE_INTERVAL_SECONDS = 600
 RECOVERY_CHUNK_RECORDS = 72                # 12 h per pass: keeps raw records well under ~10 KB of RAM
 RECOVERY_MAX_AGE_SECONDS = 7 * 86400       # never reach further back than this
 
-# One-time job: on 2026-10-08 the station was unplugged twice while the internet was down, so it
-# booted without NTP and uploaded that day stamped 1999/2000. The console archive still has the
-# real data, but stamped with the console clock, which ran ~3 h behind until v1.0.5 fixed it.
-# The whole console day goes raw to the "Consola" tab; the Apps Script function importarConsola()
-# measures the real offset against the main sheet and fills only the gap.
-BACKFILL_ID = "consola_20261008"
-BACKFILL_SINCE = (2026, 10, 7, 23, 50)     # console clock, exclusive
-BACKFILL_UNTIL = (2026, 10, 8, 23, 50)     # console clock, inclusive
-BACKFILL_DONE_FILE = "data/" + BACKFILL_ID + ".done"
+# One-time jobs: windows of the console archive uploaded raw to the "Consola" tab, stamped with the
+# console clock, which ran exactly 3 h behind until it was fixed on 2026-10-11 ~12:25. The Apps
+# Script function importarConsola() measures that offset against the main sheet and inserts only
+# the dates the main sheet is missing. Every window ends before the clock fix, so +3 h holds for all.
+# - 08-oct: station unplugged twice while the internet was down, day uploaded stamped 1999/2000.
+# - 03-oct 06:30 and 11-oct 12:10-12:20: single records lost before gap recovery existed / while
+#   the ESP32 was being flashed. Windows include an hour around each gap.
+BACKFILL_JOBS = (
+    ("consola_20261008", (2026, 10, 7, 23, 50), (2026, 10, 8, 23, 50)),   # console clock: (exclusive, inclusive]
+    ("consola_20261003", (2026, 10, 3, 2, 20), (2026, 10, 3, 4, 30)),
+    ("consola_20261011", (2026, 10, 11, 7, 50), (2026, 10, 11, 9, 20)),
+)
+
+
+def _backfill_done_file(job_id):
+    return "data/" + job_id + ".done"
 
 # Seconds-since-epoch of the platform's time.gmtime(0) (1970 on PC, 2000 on MicroPython)
 _EPOCH_OFFSET = _civil_to_secs(*time.gmtime(0)[:6])
@@ -383,26 +390,51 @@ def recover_gap(until_tuple, disp=None):
     return False, True
 
 
+def _pending_jobs():
+    if not GOOGLE_APPS_SCRIPT_URL:
+        return []
+    return [job for job in BACKFILL_JOBS if not file_exists(_backfill_done_file(job[0]))]
+
+
 def console_backfill_pending():
-    return bool(GOOGLE_APPS_SCRIPT_URL) and not file_exists(BACKFILL_DONE_FILE)
+    return bool(_pending_jobs())
+
+
+def _mark_done(job_id, sent):
+    try:
+        with open(_backfill_done_file(job_id), "w") as f:
+            f.write(str(sent))
+    except Exception:
+        pass
 
 
 def run_console_backfill(disp=None):
     """
-    One-time upload of the console archive for BACKFILL_SINCE..BACKFILL_UNTIL (console clock)
-    to the "Consola" tab. Rows are tagged destino=consola; the timestamp carries a "CONSOLA "
-    prefix so an older Apps Script that ignores the tag can never mix them with real dates.
-    Returns True once every record was uploaded (then it never runs again).
+    One-time upload of each BACKFILL_JOBS window of the console archive (console clock) to the
+    "Consola" tab. Rows are tagged destino=consola; the timestamp carries a "CONSOLA " prefix so
+    an older Apps Script that ignores the tag can never mix them with real dates.
+    Returns True once every job is done (then it never runs again).
     """
-    if not console_backfill_pending():
-        return True
+    for job in _pending_jobs():
+        if not _run_backfill_job(job, disp):
+            return False
+    return True
 
-    log("[RESPALDO] Leyendo de la consola el dia {} para la pestana Consola...".format(BACKFILL_ID[-8:]))
-    _show(disp, "RESPALDO 08-OCT", "Leyendo consola", "", "")
-    raw = dmpaft_fetch_raw(DAVIS_HOST, DAVIS_PORT, BACKFILL_SINCE, BACKFILL_UNTIL, max_records=160)
-    if not raw:
-        log("[RESPALDO] La consola no entrego registros; se reintentara.")
+
+def _run_backfill_job(job, disp):
+    job_id, since, until = job
+    label = "RESPALDO {:02d}-{:02d}".format(until[2], until[1])
+    log("[RESPALDO] Leyendo de la consola {} -> {} para la pestana Consola...".format(_ts_str(since), _ts_str(until)))
+    _show(disp, label, "Leyendo consola", "", "")
+    raw = dmpaft_fetch_raw(DAVIS_HOST, DAVIS_PORT, since, until, max_records=160)
+    if raw is None:
+        log("[RESPALDO] La consola no respondio; se reintentara.")
         return False
+    if not raw:
+        # Already overwritten in the circular archive: nothing left to recover
+        log("[RESPALDO] La consola ya no tiene registros de {}.".format(job_id))
+        _mark_done(job_id, 0)
+        return True
 
     total = len(raw)
     sent = 0
@@ -422,17 +454,13 @@ def run_console_backfill(disp=None):
             return False
         sent += 1
         if sent % 4 == 0 or sent == total:
-            _show(disp, "RESPALDO 08-OCT", "Subiendo", "{}/{}".format(sent, total), "")
+            _show(disp, label, "Subiendo", "{}/{}".format(sent, total), "")
         del rec
         if IS_ESP32:
             import gc
             gc.collect()
         time.sleep(0.2)
 
-    try:
-        with open(BACKFILL_DONE_FILE, "w") as f:
-            f.write(str(sent))
-    except Exception:
-        pass
-    log("[RESPALDO] {} registros de la consola subidos a la pestana Consola.".format(sent))
+    _mark_done(job_id, sent)
+    log("[RESPALDO] {} registros de la consola subidos a la pestana Consola ({}).".format(sent, job_id))
     return True

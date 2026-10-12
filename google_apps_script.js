@@ -21,6 +21,8 @@
 var MIN_VALID_YEAR = 2025;
 var CONSOLE_SHEET_NAME = "Consola";
 var KEY_FORMAT = "yyyy-MM-dd HH:mm:ss";
+// Pluviómetro de 0,01" por golpe: los acumulados se suman en golpes para no arrastrar el redondeo a 0,1 mm
+var RAIN_CLICK_MM = 0.254;
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
@@ -349,12 +351,27 @@ function upsertRow_(sheet, headers, row, key, fillMissing) {
 /**
  * Lluvia del intervalo a partir de la lluvia del día: solo si la fila anterior es exactamente
  * 10 min antes (si hubo un hueco, la diferencia incluiría la lluvia de los registros faltantes).
- * Tras la medianoche la consola reinicia el día, así que todo lo del día cayó en el intervalo.
+ * Si la lluvia del día bajó, la consola reinició el día (a su medianoche, que no siempre fue la
+ * de la hoja), así que todo lo del día cayó en el intervalo. Se resta sobre los valores redondeados
+ * para que la suma de "Lluvia Int" de un día calce exacto con su "Lluvia Día".
  */
 function intervalFromDay_(key, day, prevKey, prevDay) {
   if (!prevKey || day === "" || prevDay === "" || keyMinutes_(key) - keyMinutes_(prevKey) !== 10) return "";
-  if (prevKey.substring(0, 10) !== key.substring(0, 10)) return round1_(num_(day));
-  return round1_(Math.max(0, num_(day) - num_(prevDay)));
+  var now = num_(day), before = num_(prevDay);
+  return round1_(now >= before ? now - before : now);
+}
+
+function rainClicks_(mm) {
+  return Math.round(num_(mm) / RAIN_CLICK_MM);
+}
+
+function clicksToMm_(clicks) {
+  return round1_(clicks * RAIN_CLICK_MM);
+}
+
+/** Suma de dos cantidades de lluvia en golpes del pluviómetro */
+function addRain_(a, b) {
+  return clicksToMm_(rainClicks_(a) + rainClicks_(b));
 }
 
 function fillNextInterval_(sheet, headers, row, key, nextKey, nextRowNum) {
@@ -407,13 +424,13 @@ function fillDerived_(sheet, headers, row, key, keys, pos) {
   if (needRain && nowMin - keyMinutes_(prevKey) <= 24 * 60) {
     var rain = cInt >= 0 ? num_(row[cInt]) : 0;
     if (cDay >= 0 && row[cDay] === "") {
-      row[cDay] = round1_((prevKey.substring(0, 10) === key.substring(0, 10) ? num_(prev[cDay]) : 0) + rain);
+      row[cDay] = addRain_(prevKey.substring(0, 10) === key.substring(0, 10) ? prev[cDay] : 0, rain);
     }
     if (cMonth >= 0 && row[cMonth] === "") {
-      row[cMonth] = round1_((prevKey.substring(0, 7) === key.substring(0, 7) ? num_(prev[cMonth]) : 0) + rain);
+      row[cMonth] = addRain_(prevKey.substring(0, 7) === key.substring(0, 7) ? prev[cMonth] : 0, rain);
     }
     if (cYear >= 0 && row[cYear] === "") {
-      row[cYear] = round1_((prevKey.substring(0, 4) === key.substring(0, 4) ? num_(prev[cYear]) : 0) + rain);
+      row[cYear] = addRain_(prevKey.substring(0, 4) === key.substring(0, 4) ? prev[cYear] : 0, rain);
     }
     if (cStorm >= 0 && row[cStorm] === "") {
       var rainedLast24h = rain > 0;
@@ -422,7 +439,7 @@ function fillDerived_(sheet, headers, row, key, keys, pos) {
         if (!k || nowMin - keyMinutes_(k) >= 24 * 60) break;
         if (num_(prevRows[i][cInt]) > 0) rainedLast24h = true;
       }
-      row[cStorm] = rainedLast24h ? round1_(num_(prev[cStorm]) + rain) : 0;
+      row[cStorm] = rainedLast24h ? addRain_(prev[cStorm], rain) : 0;
     }
   }
 
@@ -575,8 +592,13 @@ function ordenarPorFecha() {
  * Ver el resultado en Ver > Registros de ejecución.
  */
 function importarConsola() {
+  conBloqueo_(importarConsola_);
+}
+
+function importarConsola_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var tz = ss.getSpreadsheetTimeZone();
+  moverFilasConsola_(ss);
   var main = getMainSheet_(ss);
   var cons = ss.getSheetByName(CONSOLE_SHEET_NAME);
   if (!cons || cons.getLastRow() < 2) {
@@ -665,7 +687,12 @@ function importarConsola() {
  * - vacía "Muestras Viento" y "Tx Viento" donde repetían la velocidad del viento (error del mapeo anterior)
  */
 function repararHoja() {
+  conBloqueo_(repararHoja_);
+}
+
+function repararHoja_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  moverFilasConsola_(ss);  // antes de borrar fechas no reconocibles
   var tz = ss.getSpreadsheetTimeZone();
   var sheet = getMainSheet_(ss);
   var lastRow = sheet.getLastRow();
@@ -717,8 +744,150 @@ function repararHoja() {
     sheet.deleteRow(toDelete[d]);
   }
   ordenarPorFecha();
+  var fixedInt = recalcularLluviaInt_(sheet, headers, tz);
   Logger.log("Filas borradas (fecha inválida o duplicada): " + toDelete.length +
-    "; filas con Muestras/Tx vaciados: " + blanked);
+    "; filas con Muestras/Tx vaciados: " + blanked + "; Lluvia Int corregida en " + fixedInt + " filas");
+}
+
+/**
+ * Las filas que llegaron con fecha "CONSOLA ..." mientras corría la versión anterior del script
+ * quedaron al final de la hoja principal: se pasan a la pestaña "Consola" sin el prefijo.
+ */
+function moverFilasConsola_(ss) {
+  var main = getMainSheet_(ss);
+  var lastRow = main.getLastRow();
+  if (lastRow < 2) return 0;
+  var mh = getHeaders_(main);
+  var vals = main.getRange(2, 1, lastRow - 1, mh.length).getValues();
+  var found = [];
+  for (var i = 0; i < vals.length; i++) {
+    if (typeof vals[i][0] === "string" && /^CONSOLA\s+/.test(vals[i][0])) found.push(i);
+  }
+  if (!found.length) return 0;
+
+  var cons = getConsoleSheet_(ss);
+  var ch = getHeaders_(cons);
+  var tz = ss.getSpreadsheetTimeZone();
+  var existing = {};
+  readKeys_(cons, tz).forEach(function (k) { if (k) existing[k] = true; });
+  var map = ch.map(function (h) { return mh.indexOf(h); });
+  var out = [];
+  found.forEach(function (i) {
+    var key = normalizeKey_(vals[i][0].replace(/^CONSOLA\s+/, ""));
+    if (!key || existing[key]) return;
+    existing[key] = true;
+    var row = map.map(function (mi) { return mi >= 0 ? vals[i][mi] : ""; });
+    row[0] = key;
+    out.push(row);
+  });
+  if (out.length) {
+    cons.getRange(cons.getLastRow() + 1, 1, out.length, ch.length).setValues(out);
+    cons.getRange(2, 1, cons.getLastRow() - 1, ch.length).sort(1);
+  }
+  // Borrar de abajo hacia arriba, por bloques contiguos
+  for (var j = found.length - 1; j >= 0;) {
+    var end = found[j], start = end;
+    while (j > 0 && found[j - 1] === start - 1) { j--; start--; }
+    main.deleteRows(start + 2, end - start + 1);
+    j--;
+  }
+  Logger.log("Filas 'CONSOLA' movidas de la hoja principal a la pestaña '" + CONSOLE_SHEET_NAME + "': " +
+    found.length + " (" + out.length + " nuevas)");
+  return found.length;
+}
+
+/** Recalcula "Lluvia Int" desde la lluvia del día donde la fila anterior está 10 min antes */
+function recalcularLluviaInt_(sheet, headers, tz) {
+  var cInt = colIndex_(headers, ["lluvia int"]);
+  var cDay = colIndex_(headers, ["lluvia d"]);
+  var lastRow = sheet.getLastRow();
+  if (cInt < 0 || cDay < 0 || lastRow < 3) return 0;
+  var keys = readKeys_(sheet, tz);
+  var days = sheet.getRange(2, cDay + 1, lastRow - 1, 1).getValues();
+  var ints = sheet.getRange(2, cInt + 1, lastRow - 1, 1).getValues();
+  var changed = 0;
+  for (var i = 1; i < keys.length; i++) {
+    if (!keys[i]) continue;
+    var v = intervalFromDay_(keys[i], days[i][0], keys[i - 1], days[i - 1][0]);
+    if (v === "" || (ints[i][0] !== "" && num_(ints[i][0]) === v)) continue;
+    ints[i][0] = v;
+    changed++;
+  }
+  if (changed) sheet.getRange(2, cInt + 1, lastRow - 1, 1).setValues(ints);
+  return changed;
+}
+
+/**
+ * Una sola vez: importarConsola y repararHoja corrieron al mismo tiempo el 11-oct-2026 y dejaron
+ * mal los acumulados de lluvia de las filas importadas del 08-oct y perdieron 3 filas.
+ * Borra las filas importadas (10:40 a 20:30, sin batería), las vuelve a importar, repone la fila
+ * de 10-09 05:00 (no está en el archivo de la consola) y recalcula "Lluvia Int".
+ */
+function repararImportacion08Oct() {
+  conBloqueo_(repararImportacion08Oct_);
+}
+
+function repararImportacion08Oct_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone();
+  var main = getMainSheet_(ss);
+  var mh = getHeaders_(main);
+  var cBat = colIndex_(mh, ["bater", "consola"]);
+  var keys = readKeys_(main, tz);
+  var bats = main.getRange(2, cBat + 1, keys.length, 1).getValues();
+  var removed = 0;
+  for (var i = keys.length - 1; i >= 0; i--) {
+    if (keys[i] >= "2026-10-08 10:40:00" && keys[i] <= "2026-10-08 20:30:00" && bats[i][0] === "") {
+      main.deleteRow(i + 2);
+      removed++;
+    }
+  }
+  Logger.log("Filas importadas borradas: " + removed);
+
+  importarConsola_();
+
+  var lost = "2026-10-09 05:00:00,7.2,7.2,7.2,93,6.1,6.4,0,263,0,0,0,0,270,7.2,7.2,7.2,1016.4,Bajando Lento," +
+    "0,0,0,7.9,68.6,422.4,0.077,0,15.7,52,5.9,14.7,9.7,1.2222,,,100,10,4.24,OK,,";
+  var names = ["Fecha / Hora", "Temp Ext (°C)", "Temp Máx 10m (°C)", "Temp Mín 10m (°C)", "Humedad Ext (%)",
+    "Punto Rocío (°C)", "Bulbo Húmedo (°C)", "Viento Actual (km/h)", "Dirección Viento (°)",
+    "Viento Sost 2m (km/h)", "Viento Med 10m (km/h)", "Recorrido Viento (km)", "Ráfaga 10m (km/h)",
+    "Dir Ráfaga (°)", "Viento Frío (°C)", "Índice Calor (°C)", "Índice THW (°C)", "Presión (hPa)",
+    "Tendencia Baro", "Lluvia Int (mm)", "Tasa Lluvia (mm/h)", "Lluvia Día (mm)", "Lluvia Tormenta (mm)",
+    "Lluvia Mes (mm)", "Lluvia Año (mm)", "Grados Día Calef (°C-d)", "Grados Día Enfr (°C-d)", "Temp Int (°C)",
+    "Humedad Int (%)", "Punto Rocío Int (°C)", "Índice Calor Int (°C)", "EMC Int (%)",
+    "Densidad Aire Int (kg/m³)", "Muestras Viento", "Tx Viento", "Recepción ISS (%)",
+    "Intervalo Archivo (min)", "Batería Consola (V)", "Batería Transmisor", "Radiación Solar (W/m²)", "Índice UV"];
+  var vals = lost.split(",");
+  var byName = {};
+  names.forEach(function (n, j) {
+    var v = vals[j];
+    byName[n] = v === "" || isNaN(Number(v)) ? v : Number(v);
+  });
+  var lostKey = vals[0];
+  if (readKeys_(main, tz).indexOf(lostKey) < 0) {
+    upsertRow_(main, mh, mh.map(function (h) { return byName[h] !== undefined ? byName[h] : ""; }), lostKey, false);
+    Logger.log("Fila repuesta: " + lostKey);
+  }
+
+  var fixed = recalcularLluviaInt_(main, mh, tz);
+  Logger.log("Lluvia Int corregida en " + fixed + " filas. Listo.");
+}
+
+/**
+ * Las funciones manuales tardan minutos: con el bloqueo, una segunda ejecución (u otra función)
+ * no corre al mismo tiempo sobre la hoja. Mientras tanto la estación espera o reintenta.
+ */
+function conBloqueo_(fn) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    Logger.log("Otra función está modificando la hoja. Espera a que termine y vuelve a ejecutar.");
+    return;
+  }
+  try {
+    fn();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Alias de la versión anterior */
