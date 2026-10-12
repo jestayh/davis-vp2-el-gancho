@@ -1,22 +1,22 @@
 {
-  "version": "1.0.17",
+  "version": "1.0.18",
   "date": "2026-10-12",
-  "description": "Pantalla: tarjeta de lluvia siempre visible; errores de pantalla a la vista",
+  "description": "Pantalla: tarjeta HOY, tiempos por tarjeta, alertas de helada y rafaga, boton BOOT de diagnostico",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "44cf64ae615ac38d0cce6282cc9dc3a63c055148039337e479389c592230626c"
+      "sha256": "af47a124b9d5493b1a593ee2cee3ae3a2a3129e2f04bf2004e63cb95edb98686"
     },
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "e90c3657892ff7906a51402029bee3f9d6c3ec7a7c21bfc84fa36b2098caf55d"
+      "sha256": "cacafd6c0953b8fcf3caa41bd57bdc5a6120e7f1f9b3d85599a566f90f2be300"
     },
     {
       "remote": "src/davis_reader.mpy",
       "local": "src/davis_reader.mpy",
-      "sha256": "82465c9a94b7165f05aed592f90c041cccfeba126b87b98d56509a619c074883"
+      "sha256": "72c5a41cf7a0148a24d54de688434fa4fe0a9334375161bccd07ba32a928af4f"
     },
     {
       "remote": "src/data_logger.mpy",
@@ -26,7 +26,7 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "01f0d24429349c695f98acb08a4720f8bdec1e690009593d11b9254cc7fa90f9"
+      "sha256": "37a92ba654fe88980b7815a89295b2cd2fa59eae63495cc1bc7f92e910b2792e"
     },
     {
       "remote": "src/history_recovery.mpy",
@@ -46,7 +46,7 @@
     {
       "remote": "src/health.mpy",
       "local": "src/health.mpy",
-      "sha256": "4c24b3aa5e6fed0aba831f5c657b50448e184e7845ac94d18f7c87ced8c9414f"
+      "sha256": "58bc62f89cbea8580a8886cda1a711b2735f3d2e0e582ec2b7975d83b8fd33f4"
     },
     {
       "remote": "src/weather_underground.mpy",
