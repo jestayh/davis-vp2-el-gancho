@@ -1,6 +1,6 @@
 # Davis Vantage Pro 2 — El Gancho (Putaendo, Chile)
 
-Sistema autónomo en tiempo real para recolección, registro y telemetría de todas las variables meteorológicas de la consola **Davis Vantage Pro 2** (vía WeatherLink IP / Serial), almacenamiento continuo en **Google Sheets** (esquema oficial de 41 columnas de WeatherLink PC), base de datos local **CSV** y retransmisión a **Weather Underground** (RapidFire).
+Sistema autónomo en tiempo real para recolección, registro y telemetría de todas las variables meteorológicas de la consola **Davis Vantage Pro 2** (vía WeatherLink IP / Serial), almacenamiento continuo en **Google Sheets** (esquema oficial de 41 columnas de WeatherLink PC) y retransmisión a **Weather Underground** (RapidFire) y **Windy**. Si se corta internet, los datos se recuperan del archivo interno de la consola.
 
 Diseñado en **Python puro sin dependencias externas**, lo que permite ejecutarlo de forma idéntica en:
 1. **Microcontrolador ESP32** (firmware estándar MicroPython, funcionamiento autónomo 24/7).
@@ -44,7 +44,7 @@ ESP32 MicroPython (o PC Python Core)
   ├── 5. Indicador LED de Estado (GPIO 2):
   │       ├── Luz titilante (3 pulsos rápidos): Confirmación de envío a Weather Underground (cada 30s)
   │       └── Luz fija de 20 segundos: Confirmación de guardado en Google Sheets (cada 10 min)
-  ├── 6. Base de Datos Local: data/weather.csv (con protección de memoria Flash)
+  ├── 6. Recuperación de huecos: archivo interno de la consola Davis (DMPAFT, ~17 días)
   ├── 7. Uploader Weather Underground: RapidFire HTTP (cada 30s)
   ├── 8. Uploader Google Sheets: Webhook / Cloudflare Proxy con 41 columnas (cada 10 min)
   └── 9. OTA Updater: Actualizaciones de firmware remotas vía GitHub Releases
@@ -112,7 +112,7 @@ El sistema genera exactamente el mismo esquema de 41 campos que exporta el softw
 | :--- | :--- | :--- |
 | **LED Azul Integrado** | **GPIO 2** | Indicador de actividad no-bloqueante (Titileo en WU, 20s en Sheets) |
 
-> **Nota:** La pantalla OLED es completamente opcional. Si no está conectada o falla la comunicación I2C, el firmware continúa recolectando datos, registrando en CSV y subiendo a la nube de forma transparente sin interrupciones.
+> **Nota:** La pantalla OLED es completamente opcional. Si no está conectada o falla la comunicación I2C, el firmware continúa recolectando datos y subiéndolos a la nube de forma transparente sin interrupciones.
 
 ---
 
@@ -133,13 +133,16 @@ davis-vp2-el-gancho/
 │       └── esp32_oled_dashboard.jpg       # Foto del ESP32 y pantalla OLED
 ├── data/
 │   ├── .gitkeep
-│   └── weather.csv             # Base de datos local generada en tiempo real
+│   └── last_sync.txt           # Hora del último registro subido (inicio de la recuperación)
 └── src/
     ├── __init__.py
     ├── davis_reader.py         # Parser binario LOOP 1/2 y cliente TCP socket con CRC-16
     ├── weather_underground.py  # Uploader RapidFire para Weather Underground
     ├── google_sheets.py        # Uploader con proxy Cloudflare para Google Sheets (41 columnas)
-    ├── data_logger.py          # Logger CSV con WindTracker de ráfagas
+    ├── data_logger.py          # Hora del último registro subido a la planilla
+    ├── history_recovery.py     # Relleno de huecos desde el archivo de la consola
+    ├── health.py               # Reporte diario de salud (pestaña Estado)
+    ├── watchdog.py             # Reinicio automático si el programa se cuelga
     ├── display.py              # Gestor OLED SSD1306 con carrusel de 7 pantallas animadas
     ├── ssd1306.py              # Driver I2C para pantalla SSD1306 en MicroPython
     └── ota_updater.py          # Actualizador de firmware inalámbrico (OTA) vía GitHub
