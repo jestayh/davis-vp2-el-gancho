@@ -820,6 +820,11 @@ def sync_console_time(host, port, tolerance_s=30, timeout=4.0):
         return "error", None
     finally:
         if sock:
+            # Orderly close, so the WeatherLink IP (one client at a time) frees the connection at once
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
             try:
                 sock.close()
             except Exception:
@@ -866,47 +871,35 @@ def parse_hilows(packet):
     }
 
 
-def query_hilows(host, port, timeout=4.0):
-    """Today's extremes (see parse_hilows) read with the HILOWS command; None if unavailable"""
-    sock = None
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-        wakeup_console(sock)
-        _drain_socket(sock, timeout)
-        sock.sendall(b"HILOWS\n")
-        if not _wait_ack(sock, timeout):
-            return None
-        want = HILOWS_LEN + 2
-        buf = b""
-        start_t = time.time()
-        while len(buf) < want and (time.time() - start_t) < timeout:
-            chunk = sock.recv(want - len(buf))
-            if not chunk:
-                break
-            buf += chunk
-        result = parse_hilows(buf)
-        if result is None:
-            log("[HOY] Respuesta HILOWS incompleta o con CRC invalido ({} bytes)".format(len(buf)))
-        return result
-    except Exception as e:
-        log("[HOY] Error leyendo maximas/minimas de la consola: {}".format(e))
+def _read_hilows(sock, timeout):
+    """Today's extremes (see parse_hilows) with the HILOWS command on an open, awake connection"""
+    _drain_socket(sock, timeout)          # leftovers of the LOOP packets
+    sock.sendall(b"HILOWS\n")
+    if not _wait_ack(sock, timeout):
+        log("[HOY] La consola no acepto HILOWS")
         return None
-    finally:
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
+    want = HILOWS_LEN + 2
+    buf = b""
+    start_t = time.time()
+    while len(buf) < want and (time.time() - start_t) < timeout:
+        chunk = sock.recv(want - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    result = parse_hilows(buf)
+    if result is None:
+        log("[HOY] Respuesta HILOWS incompleta o con CRC invalido ({} bytes)".format(len(buf)))
+    return result
 
 
-def query_station(host, port, timeout=3.5):
+def query_station(host, port, timeout=3.5, hilows=False):
     """
     On-demand station query: requests 1x LOOP 1 and 1x LOOP 2 via LPS 3 2.
     Decodes consolidated live metrics (including Davis console hardware 10m gusts
     and 2m sustained wind), and immediately closes the TCP socket to free WeatherLink IP.
     Falls back gracefully to standard LOOP 1 if LOOP 2 is unavailable.
+    With hilows=True, today's extremes (parse_hilows keys) are added from the same connection;
+    if that part fails, the live reading is still returned.
     """
     sock = None
     try:
@@ -1006,6 +999,15 @@ def query_station(host, port, timeout=3.5):
             if data1.get("thw_index_c") is None:
                 data1["thw_index_c"] = calculate_thw_index(t_out, h_out, w_spd)
 
+        if hilows:
+            # Same connection: the WeatherLink IP takes a single client, and a second connection
+            # right after this one could be refused and leave the next readings failing
+            try:
+                extremes = _read_hilows(sock, timeout)
+                if extremes:
+                    data1.update(extremes)
+            except Exception as e:
+                log("[HOY] Error leyendo maximas/minimas de la consola: {}".format(e))
         return data1
     except Exception as e:
         err_msg = str(e).lower()

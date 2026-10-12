@@ -55,11 +55,6 @@ from src.davis_reader import (
     query_station, sync_console_time, log, format_timestamp_local, format_timestamp_utc,
     clock_is_valid, sync_ntp
 )
-try:
-    from src.davis_reader import query_hilows
-except ImportError:      # an outdated davis_reader module must never stop the station
-    def query_hilows(*args, **kwargs):
-        return None
 from src.weather_underground import upload
 from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailyStats
 from src.display import WeatherDisplay, WAKE_SECONDS, DIAG_SECONDS
@@ -506,14 +501,18 @@ def main(max_cycles=None):
                 drive_due = (current_slot > last_logged_slot) and not wu_due
 
                 if wu_due:
-                    fresh = query_station(DAVIS_HOST, DAVIS_PORT, timeout=SOCKET_TIMEOUT_SECONDS)
+                    # Today's extremes come in the same connection, every HILOWS_EVERY_SECONDS
+                    want_hilows = time.time() >= next_hilows
+                    fresh = query_station(DAVIS_HOST, DAVIS_PORT, timeout=SOCKET_TIMEOUT_SECONDS, hilows=want_hilows)
                     if not fresh:
                         health.err_console += 1
                     if fresh:
                         data = fresh
-                        if time.time() >= next_hilows:
+                        if want_hilows:
                             next_hilows = time.time() + HILOWS_EVERY_SECONDS
-                            hilows = query_hilows(DAVIS_HOST, DAVIS_PORT, timeout=SOCKET_TIMEOUT_SECONDS) or hilows
+                            got = {k: v for k, v in fresh.items() if k.startswith("today_")}
+                            if got:
+                                hilows = got
                         data.update(hilows)
                         cur_t = data.get("temp_out_c")
                         if cur_t is not None:
