@@ -1,12 +1,12 @@
 {
-  "version": "1.0.21",
+  "version": "1.0.22",
   "date": "2026-10-12",
-  "description": "Sin memoria para conexiones: subida por partes y reinicio de seguridad",
+  "description": "Menos memoria: sin CSV local, lectura de la consola sin recargar modulos",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "6e094210aeff383a9b144e61b4460331403d0e2365c4ec723ceef6e9c22958b5"
+      "sha256": "3269228ae5eeb0b90b5b03ca16f052a424d4e9b36ed7102c49b6656c48f17747"
     },
     {
       "remote": "src/display.mpy",
@@ -16,12 +16,12 @@
     {
       "remote": "src/davis_reader.mpy",
       "local": "src/davis_reader.mpy",
-      "sha256": "a31cb821f800c2a2e4502f7de39b084fe0ac3cdeed8e28a433a276d85a4a2015"
+      "sha256": "5b92d44958c1bf56165ef03a011f2a7da782d686b299fc8b3023093a2e7b7f70"
     },
     {
       "remote": "src/data_logger.mpy",
       "local": "src/data_logger.mpy",
-      "sha256": "fab75c28040993ac143ceb7d891551116bdb3aee9382851ed5ef1caeb1bb13a8"
+      "sha256": "ce0255858d7195b3c4aecfd07117989f2063900c22c1b945e2a06e8d85bcfd8b"
     },
     {
       "remote": "src/google_sheets.mpy",
@@ -31,7 +31,7 @@
     {
       "remote": "src/history_recovery.mpy",
       "local": "src/history_recovery.mpy",
-      "sha256": "5552b8a9998b6ef6a55c82d5235b332e9ffa6779befb62c6bfbc4b946ac94136"
+      "sha256": "48181d8f5940f5708fcfc681223249bd6ea3efc906e34770baf8ef712b500d5a"
     },
     {
       "remote": "src/ota_updater.mpy",
