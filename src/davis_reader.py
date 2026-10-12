@@ -826,6 +826,81 @@ def sync_console_time(host, port, tolerance_s=30, timeout=4.0):
                 pass
 
 
+HILOWS_LEN = 436
+
+
+def _hhmm(raw):
+    """Davis hour*100+minute -> 'HH:MM', None when dashed or invalid"""
+    return format_time_hm(raw) or None
+
+
+def parse_hilows(packet):
+    """
+    Today's extremes from the console's HILOWS block (436 bytes + 2 CRC bytes, Vantage serial
+    reference X.3), recorded by the console itself since its midnight, so a reboot of the ESP32
+    loses nothing. Keys: today_temp_hi_c/_time, today_temp_lo_c/_time, today_gust_kmh/_time,
+    today_rain_rate_mmh/_time. Values the console has not set (dashed) come back as None.
+    """
+    if len(packet) < HILOWS_LEN + 2 or not verify_crc(packet[:HILOWS_LEN + 2]):
+        return None
+    lo_f, hi_f, t_lo, t_hi = struct.unpack_from("<hhHH", packet, 47)
+    gust_mph = packet[16]
+    t_gust = struct.unpack_from("<H", packet, 17)[0]
+    rate, t_rate = struct.unpack_from("<HH", packet, 116)
+
+    def temp_c(tenths_f):
+        if tenths_f in (32767, -32768):
+            return None
+        return round((tenths_f / 10.0 - 32.0) * 5.0 / 9.0, 1)
+
+    return {
+        "today_temp_hi_c": temp_c(hi_f),
+        "today_temp_hi_time": _hhmm(t_hi),
+        "today_temp_lo_c": temp_c(lo_f),
+        "today_temp_lo_time": _hhmm(t_lo),
+        "today_gust_kmh": round(gust_mph * 1.609344, 1) if gust_mph != 255 else None,
+        "today_gust_time": _hhmm(t_gust),
+        # Rain rate in clicks of 0.01" per hour
+        "today_rain_rate_mmh": round(rate * 0.254, 1) if rate != 0xFFFF else None,
+        "today_rain_rate_time": _hhmm(t_rate),
+    }
+
+
+def query_hilows(host, port, timeout=4.0):
+    """Today's extremes (see parse_hilows) read with the HILOWS command; None if unavailable"""
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        wakeup_console(sock)
+        _drain_socket(sock, timeout)
+        sock.sendall(b"HILOWS\n")
+        if not _wait_ack(sock, timeout):
+            return None
+        want = HILOWS_LEN + 2
+        buf = b""
+        start_t = time.time()
+        while len(buf) < want and (time.time() - start_t) < timeout:
+            chunk = sock.recv(want - len(buf))
+            if not chunk:
+                break
+            buf += chunk
+        result = parse_hilows(buf)
+        if result is None:
+            log("[HOY] Respuesta HILOWS incompleta o con CRC invalido ({} bytes)".format(len(buf)))
+        return result
+    except Exception as e:
+        log("[HOY] Error leyendo maximas/minimas de la consola: {}".format(e))
+        return None
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
 def query_station(host, port, timeout=3.5):
     """
     On-demand station query: requests 1x LOOP 1 and 1x LOOP 2 via LPS 3 2.

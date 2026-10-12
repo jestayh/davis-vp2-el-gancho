@@ -106,9 +106,22 @@ WAKE_SECONDS = 15 * 60
 # The console is polled every 30 s: with no new reading for this long the data on screen is stale
 STALE_DATA_SECONDS = 120
 
-# Cards shown every CARD_ROTATION_SECONDS; the big temperature ("ahora") comes back between the others
-_ROTATION = ("ahora", "exterior", "ahora", "viento", "ahora", "lluvia",
-             "ahora", "sol", "ahora", "sistema", "ahora", "subidas")
+# The rotation shows the weather; the big temperature ("ahora", alternating with the forecast)
+# comes back between the others. "problema" only appears when something is wrong, and "sol"
+# every other round. SISTEMA and SUBIDAS are for visits: shown while diagnostics are on (BOOT).
+_ROTATION = ("ahora", "hoy", "ahora", "viento", "ahora", "lluvia",
+             "ahora", "aire", "ahora", "problema", "ahora", "sol")
+_DIAG_ROTATION = ("sistema", "subidas")
+DIAG_SECONDS = 120
+# Seconds each card stays (the main loop waits for it); the forecast takes as long as its message
+CARD_SECONDS = {"ahora": 6, "hoy": 10, "viento": 8, "lluvia": 8, "aire": 8, "sol": 8,
+                "problema": 10, "sistema": 10, "subidas": 10}
+RAIN_CARD_SECONDS = 12             # LLUVIA while it is raining
+# Weather alerts in the header (daytime only: they never light the screen at night)
+FROST_WARN_C = 2.0
+GUST_ALERT_KMH = 50
+ISS_RECEPT_LOW = 80
+CONSOLE_BATTERY_LOW_V = 3.5
 _RESET_SHORT = {"Reset hardware": "Reset HW", "Reinicio software": "Reset SW"}
 
 # Sun rays: unit directions x10 (integer math)
@@ -266,6 +279,12 @@ class WeatherDisplay:
         self.reset_cause = None
         self.iss_recept = None
         self._forecast_turn = True    # the first "ahora" shows the big temperature
+        self._round = 0               # completed rotations (SOL/LUNA every other one)
+        self._diag_from = 0
+        self._diag_on = False
+        self._diag_index = 0
+        self._card_from = None        # when the current card appeared, and for how long it stays
+        self._card_hold = 0
 
         if not IS_ESP32:
             return
@@ -500,6 +519,14 @@ class WeatherDisplay:
             return "SIN DATOS", _format_age(stale_for), True, night
         if self.gdrive_status == "ERR":
             return "NO SHEETS", time_hm, True, night
+        if not night:
+            # Weather alerts while they last (by day only: they must not light the room at night)
+            t = data.get("temp_out_c")
+            gust = data.get("windgustkmh_10m")
+            if t is not None and t <= FROST_WARN_C:
+                return ("HELADA" if t <= 0 else "HELADA?"), "{:.1f}C".format(t), True, night
+            if gust is not None and gust >= GUST_ALERT_KMH:
+                return "RAFAGA", "{:.0f}km/h".format(gust), True, night
         return card_title[:9], time_hm, False, night
 
     def show_wifi_status(self, ssid, ip_addr=None):
@@ -520,11 +547,61 @@ class WeatherDisplay:
         """ISS reception (%) of the last logged interval, from the console's wind sample count"""
         self.iss_recept = pct
 
+    def start_diagnostics(self):
+        """BOOT button: show SISTEMA and SUBIDAS (and keep the screen on) for DIAG_SECONDS"""
+        self._diag_from = _ticks()
+        self._diag_on = True
+        self.wake(DIAG_SECONDS)
+
+    def _in_diagnostics(self):
+        if self._diag_on and _since_s(self._diag_from) >= DIAG_SECONDS:
+            self._diag_on = False
+        return self._diag_on
+
+    def problems(self, data):
+        """Short descriptions (<= 16 chars) of what is wrong right now; empty when all is fine"""
+        out = []
+        if self.gdrive_status == "ERR":
+            out.append("Planilla: falla")
+        if self.wu_status == "ERR":
+            out.append("WU: falla")
+        if data.get("tx_battery_status") == 1:
+            out.append("Bat. transm baja")
+        volt = data.get("console_battery_v")
+        if volt is not None and volt < CONSOLE_BATTERY_LOW_V:
+            out.append("Bat.consola {:.1f}V".format(volt))
+        if self.iss_recept is not None and self.iss_recept < ISS_RECEPT_LOW:
+            out.append("Recepcion {:.0f}%".format(self.iss_recept))
+        if self.last_error:
+            out.append("Pantalla: error")
+        return out
+
+    def card_seconds_left(self, default):
+        """Seconds the main loop should still wait so the current card stays its CARD_SECONDS"""
+        if self._card_from is None:
+            return default
+        return self._card_hold - _since_s(self._card_from)
+
+    def _hold(self, card, data):
+        if card == "lluvia" and (data.get("rain_rate_mm_per_hr") or 0) > 0:
+            return RAIN_CARD_SECONDS
+        return CARD_SECONDS.get(card, 8)
+
     def _next_card(self, data):
         """Next card id in _ROTATION; the big temperature is never shown twice in a row"""
+        if self._in_diagnostics():
+            card = _DIAG_ROTATION[self._diag_index % len(_DIAG_ROTATION)]
+            self._diag_index += 1
+            return card
         for _ in range(len(_ROTATION)):
             card = _ROTATION[self.card_index]
             self.card_index = (self.card_index + 1) % len(_ROTATION)
+            if self.card_index == 0:
+                self._round += 1
+            if card == "problema" and not self.problems(data):
+                continue
+            if card == "sol" and self._round % 2 == 0:
+                continue
             if card == "ahora" and self.last_card_title in ("AHORA", "PRONOST."):
                 continue
             return card
@@ -655,25 +732,46 @@ class WeatherDisplay:
 
     def _get_card_content(self, card, data):
         """Return (card_title, [line1, line2, line3, line4]) for a text card"""
-        if card == "exterior":
-            # AMBIENTE EXTERIOR
-            t_out = data.get("temp_out_c")
-            h_out = data.get("humidity_out")
-            dp = data.get("dewpoint_c")
-            bar = data.get("pressure_hpa")
-            trend = data.get("barometer_trend") or "Estable"
+        if card == "hoy":
+            # TODAY'S EXTREMES: from the console (HILOWS, kept over ESP32 reboots), corrected with
+            # the live reading when it already went beyond them
+            now_hm = str(data.get("timestamp") or "")[11:16] or "--:--"
+            t = data.get("temp_out_c")
+            hi, hi_t = data.get("today_temp_hi_c"), data.get("today_temp_hi_time")
+            lo, lo_t = data.get("today_temp_lo_c"), data.get("today_temp_lo_time")
+            if t is not None and (hi is None or t > hi):
+                hi, hi_t = t, now_hm
+            if t is not None and (lo is None or t < lo):
+                lo, lo_t = t, now_hm
+            gust, gust_t = data.get("today_gust_kmh"), data.get("today_gust_time")
 
-            t_str = "{:.1f}C".format(t_out) if t_out is not None else "--.-C"
-            h_str = "{}%".format(h_out) if h_out is not None else "--%"
-            dp_str = "{:.1f}C".format(dp) if dp is not None else "--.-C"
-            bar_str = "{:.1f}hPa".format(bar) if bar is not None else "--hPa"
+            def temp_line(label, v, at):
+                return label + ("{:6.1f}C ".format(v) if v is not None else "  --.-C ") + (at or "--:--")
 
-            return "EXTERIOR", [
-                "Temp: " + t_str + " " + h_str,
-                "Rocio: " + dp_str,
-                "Pres: " + bar_str,
-                "Tend: " + trend[:10]
+            return "HOY", [
+                temp_line("Max", hi, hi_t),
+                temp_line("Min", lo, lo_t),
+                ("Raf{:4.0f}kmh ".format(gust) + (gust_t or "--:--")) if gust is not None else "Raf   --kmh",
+                "Lluvia {:.1f} mm".format(float(data.get("rain_day_mm") or 0))
             ]
+
+        elif card == "aire":
+            # AIR: feels-like (THW), dew point, pressure and its 3 h trend
+            def c(v):
+                return "{:.1f}C".format(v) if v is not None else "--.-C"
+            bar = data.get("pressure_hpa")
+            return "AIRE", [
+                "Sens:  " + c(data.get("thw_index_c")),
+                "Rocio: " + c(data.get("dewpoint_c")),
+                "Pres: " + ("{:.1f}hPa".format(bar) if bar is not None else "--hPa"),
+                "Tend: " + (data.get("barometer_trend") or "--")[:10]
+            ]
+
+        elif card == "problema":
+            lines = self.problems(data)
+            if len(lines) > 4:
+                lines = lines[:3] + ["+{} mas".format(len(lines) - 3)]
+            return "PROBLEMA", lines
 
         elif card == "viento":
             # VIENTO Y RAFAGAS (LOOP 2)
@@ -750,9 +848,10 @@ class WeatherDisplay:
         now_str (ESP32 local clock). It turns into an inverted alert when the console has not
         answered for STALE_DATA_SECONDS ([SIN DATOS 5m]) or the last Sheets upload failed.
         Between NIGHT_START_HOUR and NIGHT_END_HOUR the screen is off unless there is an alert.
-        Cards follow _ROTATION: the big temperature (AHORA) alternates with EXTERIOR, VIENTO,
-        LLUVIA, SOL/LUNA, SISTEMA and SUBIDAS. A card that fails to draw shows ERROR PANTALLA
-        with the exception, instead of silently keeping the previous card.
+        Cards follow _ROTATION: the big temperature (AHORA, alternating with the forecast) between
+        HOY, VIENTO, LLUVIA, AIRE, PROBLEMA (only if something is wrong) and SOL/LUNA; each stays
+        CARD_SECONDS (see card_seconds_left). By day the header also flags frost and strong gusts.
+        A card that fails to draw shows ERROR PANTALLA with the exception.
         """
         if not self.has_oled or not self.oled:
             return
@@ -779,8 +878,12 @@ class WeatherDisplay:
             if night and not alert:
                 self._set_power(False, None)
                 self.last_card_lines = None  # gentle entrance when the screen comes back on
+                self._card_from = None
                 return
             self._set_power(True, CONTRAST_NIGHT if night else CONTRAST_DAY)
+            self._card_from = _ticks()
+            # The forecast card already lasts as long as its scrolling message
+            self._card_hold = 0 if card_title == "PRONOST." else self._hold(card, data)
 
             if lines is None and card_title == "PRONOST.":
                 dark = _is_dark(now_str, data)

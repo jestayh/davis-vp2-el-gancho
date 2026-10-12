@@ -42,6 +42,26 @@ def _rssi():
         return None
 
 
+def _ssid():
+    """WiFi network in use (shows whether the station joined a known network or an auto-detected one)"""
+    if not IS_ESP32:
+        return None
+    try:
+        import network
+        return network.WLAN(network.STA_IF).config("essid") or None
+    except Exception:
+        return None
+
+
+def _ota_route(path="data/ota_route.txt"):
+    """Label of the OTA route that delivered the last manifest (see ota_updater.ROUTE_FILE)"""
+    try:
+        with open(path, "r") as f:
+            return f.read().strip()[:20] or None
+    except Exception:
+        return None
+
+
 def _kb(n):
     return round(n / 1024.0, 1) if n is not None else None
 
@@ -60,6 +80,7 @@ class Health:
         self.err_sheets = 0
         self.err_wu = 0
         self.recoveries = 0
+        self.err_display = 0
         self.mem_min = None
 
     def tick(self):
@@ -86,6 +107,9 @@ class Health:
             "err_sheets": self.err_sheets,
             "err_wu": self.err_wu,
             "recoveries": self.recoveries,
+            "err_display": self.err_display,
+            "ssid": _ssid(),
+            "ota_route": _ota_route(),
         }
 
     def sent(self):

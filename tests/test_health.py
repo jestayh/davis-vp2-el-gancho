@@ -11,6 +11,8 @@ def make(monkeypatch, mem=None):
     monkeypatch.setattr(health, "_ticks", lambda: clock["ms"])
     monkeypatch.setattr(health, "_mem_free", lambda: mem.pop(0) if mem else None)
     monkeypatch.setattr(health, "_rssi", lambda: -67)
+    monkeypatch.setattr(health, "_ssid", lambda: "2.4G_Casa")
+    monkeypatch.setattr(health, "_ota_route", lambda: "Proxy HTTP")
     return health.Health(fw="1.0.15", reset_cause="Watchdog"), clock
 
 
@@ -36,11 +38,18 @@ def test_counters_and_lowest_ram_start_over_after_each_report(monkeypatch):
     r = h.report()                                    # samples current RAM: 70000
     assert r == {"fw": "1.0.15", "uptime_h": 0.0, "reset_cause": "Watchdog", "mem_free_kb": 68.4,
                  "mem_min_kb": 50.0, "rssi": -67, "err_console": 2, "err_sheets": 1, "err_wu": 0,
-                 "recoveries": 1}
+                 "recoveries": 1, "err_display": 0, "ssid": "2.4G_Casa", "ota_route": "Proxy HTTP"}
     h.sent()
     h.tick()                                          # RAM 60000
     r = h.report()
     assert r["err_console"] == 0 and r["recoveries"] == 0 and r["mem_min_kb"] == 58.6
+
+
+def test_ota_route_read_from_the_updater_file(tmp_path):
+    f = tmp_path / "ota_route.txt"
+    f.write_text("Proxy HTTP\n")
+    assert health._ota_route(str(f)) == "Proxy HTTP"
+    assert health._ota_route(str(tmp_path / "missing.txt")) is None
 
 
 def test_no_ram_or_wifi_data_on_a_pc():

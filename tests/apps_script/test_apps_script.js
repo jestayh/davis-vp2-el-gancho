@@ -90,7 +90,7 @@ check(post({ timestamp: "2026-10-11 13:00:00", temp_out_c: 18, wind_speed_kmh: 3
              rain_day_mm: 0, storm_rain_mm: 0, rain_month_mm: 10.2, rain_year_mm: 421, reset_cause: "Encendido",
              barometer_trend: "Estable" }) === "SUCCESS", "fila normal SUCCESS");
 const H = main.rows[0];
-check(H[H.length - 1] === "Reinicio", "columna Reinicio agregada");
+check(H[H.length - 2] === "Reinicio" && H[H.length - 1] === "Fallos WU", "columnas Reinicio y Fallos WU agregadas");
 const r1300 = get("2026-10-11 13:00:00");
 check(r1300[H.indexOf("Muestras Viento")] === 225 && r1300[H.indexOf("Tx Viento")] === 1, "Muestras y Tx en sus columnas (no la velocidad)");
 check(r1300[H.indexOf("Reinicio")] === "Encendido", "Reinicio = Encendido");
@@ -205,7 +205,9 @@ check(!!get("2026-10-11 13:20:00"), "con la pestaña Estado, los datos siguen ye
 ctx.FAKE_NOW = "2026-10-12 01:40:00";
 ctx.activarAvisos();
 ctx.activarAvisos();
-check(ctx.ScriptApp.triggers.length === 1 && ctx.ScriptApp.triggers[0].m === 30, "un solo activador cada 30 min");
+check(ctx.ScriptApp.triggers.length === 2 && ctx.ScriptApp.triggers[0].m === 30 &&
+      ctx.ScriptApp.triggers[1].fn === "resumenDiario" && ctx.ScriptApp.triggers[1].h === 8,
+      "un activador cada 30 min y uno diario a las 8 (sin duplicar)");
 check(mails.length === 0, "40 min sin datos: sin correo");
 ctx.FAKE_NOW = "2026-10-12 02:10:00";
 ctx.revisarEstacion();

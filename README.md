@@ -225,6 +225,29 @@ Las funciones que se ejecutan a mano desde el editor (`repararHoja`, `importarCo
 usan el código guardado y no necesitan publicarse. Para los avisos por correo, en **Activadores** debe
 existir un solo `revisarEstacion`.
 
+### Resumen diario y avisos
+
+`activarAvisos()` (se ejecuta una vez desde el editor) programa dos activadores:
+
+- **`revisarEstacion` cada 30 min:** avisa por correo si no llegan datos; del tiempo (helada, ráfagas,
+  lluvia intensa, baterías); y de fallas silenciosas: 3 o más reinicios en 24 h, temperatura y humedad
+  idénticas por 6 h (sensor trabado), recepción del transmisor bajo 80 %, Weather Underground o Windy sin
+  recibir por 2 h. Cada aviso llega una sola vez por noche, día o semana.
+- **`resumenDiario` a las 8:00:** un correo con el día anterior, pensado para leerse solo por el asunto
+  (`El Gancho 11-oct · 3,1 / 18,2 °C · 2,5 mm · ✅ todo bien`). Si un día no llega, eso también es un aviso.
+  Para enviarlo a más personas: propiedad del script `CORREOS_RESUMEN` (correos separados por coma).
+
+La pestaña **Estado** marca en rojo los valores fuera de rango (RAM mínima < 30 KB, reinicio por Watchdog,
+errores de pantalla, menos de 140 registros el día anterior…).
+
+### Pantalla
+
+Rota AHORA (temperatura grande, que se alterna con el pronóstico) con HOY (máxima y mínima del día con su
+hora, leídas de la consola), VIENTO, LLUVIA, AIRE y SOL/LUNA. Cada tarjeta dura lo que necesita para leerse
+(`CARD_SECONDS` en `src/display.py`). La tarjeta PROBLEMA aparece solo si algo falla. De día, el encabezado se
+invierte para avisar de helada (`HELADA?` desde 2 °C) o ráfagas de 50 km/h o más. **En una visita**, el botón
+**BOOT** del ESP32 muestra durante 2 minutos las tarjetas técnicas SISTEMA y SUBIDAS.
+
 ### Windy
 
 El Apps Script reenvía cada registro reciente (de menos de 30 min; los recuperados de la consola no) a la

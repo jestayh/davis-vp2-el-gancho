@@ -17,7 +17,10 @@
  * Funciones para ejecutar a mano desde el editor:
  * - activarAvisos(): correo si la estación pasa 60 min sin enviar datos (y cuando vuelven), y
  *   avisos del tiempo: helada / riesgo de helada, ráfagas fuertes, lluvia intensa y baterías bajas
- *   (umbrales en FROST_C, FROST_WARN_C, GUST_KMH, RAIN_RATE_MMH, RAIN_DAY_MM, CONSOLE_BATTERY_V).
+ *   (umbrales en FROST_C, FROST_WARN_C, GUST_KMH, RAIN_RATE_MMH, RAIN_DAY_MM, CONSOLE_BATTERY_V);
+ *   de fallas silenciosas: reinicios repetidos, sensor congelado, mala recepción del transmisor,
+ *   Weather Underground o Windy sin recibir; y el resumen diario de las 8:00 (resumenDiario).
+ *   Más destinatarios del resumen: propiedad del script CORREOS_RESUMEN (separados por coma).
  * - importarConsola(): rellena el hueco del 08-oct-2026 con la pestaña "Consola".
  * - repararHoja(): borra filas con fecha inválida y duplicados, y vacía Muestras/Tx erróneos.
  * - ordenarPorFecha(): reordena toda la hoja.
@@ -40,8 +43,24 @@ var STATUS_COLUMNS = [
   ["Fallas consola", "err_console"],
   ["Fallas Sheets", "err_sheets"],
   ["Fallas WU", "err_wu"],
-  ["Recuperaciones consola", "recoveries"]
+  ["Recuperaciones consola", "recoveries"],
+  ["Errores pantalla", "err_display"],
+  ["Red WiFi", "ssid"],
+  ["Ruta OTA", "ota_route"],
+  ["Registros ayer", "records_yesterday"]     // calculado aquí: filas del día anterior (lo normal, 144)
 ];
+// Celdas del reporte que se marcan en rojo: [campo, función que decide si el valor es malo]
+var STATUS_LIMITS = [
+  ["reset_cause", function (v) { return v === "Watchdog"; }],
+  ["mem_min_kb", function (v) { return v !== "" && v < 30; }],
+  ["rssi", function (v) { return v !== "" && v < -80; }],
+  ["err_console", function (v) { return v > 50; }],
+  ["err_sheets", function (v) { return v > 3; }],
+  ["err_wu", function (v) { return v > 144; }],              // 5 % de ~2.880 envíos al día
+  ["err_display", function (v) { return v > 0; }],
+  ["records_yesterday", function (v) { return v !== "" && v < 140; }]
+];
+var STATUS_BAD_COLOR = "#f4cccc";
 // Pluviómetro de 0,01" por golpe: los acumulados se suman en golpes para no arrastrar el redondeo a 0,1 mm
 var RAIN_CLICK_MM = 0.254;
 
@@ -69,6 +88,7 @@ function doPost(e) {
     if (!toConsole) {
       handleNewYear_(ss, key);
       ensureHeader_(sheet, "Reinicio");
+      ensureHeader_(sheet, "Fallos WU");
     }
 
     var headers = getHeaders_(sheet);
@@ -115,17 +135,43 @@ function appendStatus_(ss, data) {
     sheet.getRange(1, 1, 1, titles.length).setFontWeight("bold").setBackground("#202124").setFontColor("#FFFFFF");
     sheet.setFrozenRows(1);
   }
+  // Columnas agregadas en versiones posteriores van al final de una pestaña ya existente
+  STATUS_COLUMNS.forEach(function (c) { ensureHeader_(sheet, c[0]); });
   var headers = getHeaders_(sheet);
-  var row = headers.map(function (h) {
+  var tz = ss.getSpreadsheetTimeZone();
+  data.records_yesterday = recordsOfDay_(getMainSheet_(ss), tz, shiftKey_(key, -1440).substring(0, 10));
+  var fields = headers.map(function (h) {
     for (var i = 0; i < STATUS_COLUMNS.length; i++) {
-      if (STATUS_COLUMNS[i][0] === h) {
-        return i === 0 ? key : v_(data[STATUS_COLUMNS[i][1]], "");
-      }
+      if (STATUS_COLUMNS[i][0] === h) return STATUS_COLUMNS[i][1];
     }
-    return "";
+    return null;
+  });
+  var row = fields.map(function (f, i) {
+    return i === 0 ? key : f ? v_(data[f], "") : "";
   });
   sheet.appendRow(row);
+
+  var rowNum = sheet.getLastRow();
+  STATUS_LIMITS.forEach(function (lim) {
+    var c = fields.indexOf(lim[0]);
+    if (c >= 0 && row[c] !== "" && lim[1](row[c])) {
+      sheet.getRange(rowNum, c + 1).setBackground(STATUS_BAD_COLOR);
+    }
+  });
   return "SUCCESS";
+}
+
+/** Filas de la hoja principal con fecha `day` ("yyyy-MM-dd"), mirando solo las últimas 400 */
+function recordsOfDay_(sheet, tz, day) {
+  var lastRow = sheet.getLastRow();
+  var n = Math.min(TAIL_ROWS, lastRow - 1);
+  if (n < 1) return 0;
+  var count = 0;
+  sheet.getRange(lastRow - n + 1, 1, n, 1).getValues().forEach(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (k && k.substring(0, 10) === day) count++;
+  });
+  return count;
 }
 
 function getConsoleSheet_(ss) {
@@ -201,7 +247,8 @@ function createHeaders(sheet) {
     "Batería Transmisor",
     "Radiación Solar (W/m²)",
     "Índice UV",
-    "Reinicio"
+    "Reinicio",
+    "Fallos WU"
   ];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#202124").setFontColor("#FFFFFF");
@@ -244,6 +291,9 @@ function buildRow_(headers, data, key) {
       val = v_(data.wind_tx, "");
     } else if (h.indexOf("reinicio") !== -1) {
       val = v_(data.reset_cause, "");
+    } else if (h.indexOf("fallos wu") !== -1) {
+      // Envíos a Weather Underground que fallaron en el intervalo (de ~20)
+      val = v_(data.wu_err, "");
     } else if (h.indexOf("temp max") !== -1 || h.indexOf("temp máx") !== -1 || h.indexOf("hi temp") !== -1) {
       val = v_(data.temp_out_hi_c, "");
     } else if (h.indexOf("temp min") !== -1 || h.indexOf("temp mín") !== -1 || h.indexOf("low temp") !== -1) {
@@ -579,9 +629,23 @@ function enviarWindy_(sheet, headers, key, data) {
     var code = resp.getResponseCode();
     props.setProperty("WINDY_ULTIMO", key + " -> HTTP " + code +
       (code === 200 ? "" : ": " + String(resp.getContentText()).slice(0, 150)));
+    contarWindy_(props, key, code === 200);
   } catch (err) {
     props.setProperty("WINDY_ULTIMO", key + " -> " + String(err).slice(0, 150));
+    contarWindy_(props, key, false);
   }
+}
+
+/** Envíos a Windy aceptados y fallidos por día (últimos 3 días), y hora del último aceptado */
+function contarWindy_(props, key, ok) {
+  var day = key.substring(0, 10);
+  var counts = JSON.parse(props.getProperty("WINDY_CONTEO") || "{}");
+  var c = counts[day] || [0, 0];
+  c[ok ? 0 : 1]++;
+  counts[day] = c;
+  Object.keys(counts).sort().slice(0, -3).forEach(function (d) { delete counts[d]; });
+  props.setProperty("WINDY_CONTEO", JSON.stringify(counts));
+  if (ok) props.setProperty("WINDY_ULTIMO_OK", key);
 }
 
 /** Parámetros de Windy en sus unidades: °C, m/s, Pa, mm en la última hora, W/m² */
@@ -681,14 +745,17 @@ var ALERT_CHECK_EVERY_MINUTES = 30;
 function activarAvisos() {
   desactivarAvisos();
   ScriptApp.newTrigger("revisarEstacion").timeBased().everyMinutes(ALERT_CHECK_EVERY_MINUTES).create();
+  ScriptApp.newTrigger("resumenDiario").timeBased().everyDays(1).atHour(SUMMARY_HOUR).create();
   Logger.log("Avisos activados: se revisa cada " + ALERT_CHECK_EVERY_MINUTES + " min; correo a " +
-             Session.getEffectiveUser().getEmail() + " tras " + ALERT_AFTER_MINUTES + " min sin datos.");
+             Session.getEffectiveUser().getEmail() + " tras " + ALERT_AFTER_MINUTES + " min sin datos. " +
+             "Resumen diario a las " + SUMMARY_HOUR + ":00.");
   revisarEstacion();
 }
 
 function desactivarAvisos() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === "revisarEstacion") ScriptApp.deleteTrigger(t);
+    var fn = t.getHandlerFunction();
+    if (fn === "revisarEstacion" || fn === "resumenDiario") ScriptApp.deleteTrigger(t);
   });
 }
 
@@ -740,6 +807,255 @@ function revisarEstacion() {
   }
 
   revisarClima_(sheet, tz, nowKey, props, to, url);
+  revisarSistema_(sheet, tz, nowKey, props, to, url);
+}
+
+// ---------------------------------------------------------------------------------------
+// Avisos de fallas silenciosas (los revisa revisarEstacion cada 30 min), uno por día cada uno
+// ---------------------------------------------------------------------------------------
+
+var REBOOTS_PER_DAY = 3;          // reinicios en 24 h que indican un fallo (bucle de reinicios)
+var FROZEN_HOURS = 6;             // temperatura y humedad idénticas este tiempo: sensor trabado
+var ISS_LOW_PCT = 80;             // recepción media del transmisor en 3 h
+var UPLOAD_DOWN_MINUTES = 120;    // Weather Underground o Windy sin recibir este tiempo
+var WU_FAILS_DOWN = 15;           // de ~20 envíos a WU por intervalo de 10 min
+
+function revisarSistema_(sheet, tz, nowKey, props, to, url) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  var headers = getHeaders_(sheet);
+  var n = Math.min(160, lastRow - 1);
+  var col = {
+    temp: colIndex_(headers, ["temp ext"]), hum: colIndex_(headers, ["humedad ext"]),
+    reset: colIndex_(headers, ["reinicio"]), recept: colIndex_(headers, ["recepci"]),
+    wu: colIndex_(headers, ["fallos wu"])
+  };
+  var nowMin = keyMinutes_(nowKey);
+  var today = nowKey.substring(0, 10);
+  var recent = [];   // filas de las últimas 24 h: { k, age (min), r }
+  sheet.getRange(lastRow - n + 1, 1, n, headers.length).getValues().forEach(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (!k) return;
+    var age = nowMin - keyMinutes_(k);
+    if (age >= 0 && age <= 24 * 60) recent.push({ k: k, age: age, r: r });
+  });
+  if (!recent.length) return;   // sin datos: ya avisa revisarEstacion
+  function within(minutes, c) {
+    return recent.filter(function (x) { return x.age <= minutes && (c === undefined || x.r[c] !== ""); });
+  }
+
+  if (col.reset >= 0) {
+    var boots = within(24 * 60, col.reset);
+    if (boots.length >= REBOOTS_PER_DAY) {
+      avisar_(props, to, url, "AVISO_REINICIOS", today, "se reinició " + boots.length + " veces en 24 h",
+        "Reinicios: " + boots.map(function (x) { return x.r[col.reset] + " " + x.k.substring(5, 16); }).join(", ") +
+        ".\nVarios reinicios seguidos suelen indicar un fallo del programa o de la alimentación del ESP32. " +
+        "La pestaña Estado muestra la memoria libre y la causa de cada arranque.");
+    }
+  }
+
+  if (col.temp >= 0 && col.hum >= 0) {
+    var win = within(FROZEN_HOURS * 60, col.temp);
+    var t0 = win.length ? win[0].r[col.temp] : "", h0 = win.length ? win[0].r[col.hum] : "";
+    if (win.length >= FROZEN_HOURS * 6 - 4 && win.every(function (x) {
+      return x.r[col.temp] === t0 && x.r[col.hum] === h0;
+    })) {
+      avisar_(props, to, url, "AVISO_SENSOR", today, "temperatura y humedad sin cambios hace " + FROZEN_HOURS + " h",
+        "La temperatura (" + t0 + " °C) y la humedad (" + h0 + " %) no cambiaron en " + FROZEN_HOURS + " h. " +
+        "Puede ser el sensor o el transmisor (ISS) trabado: la consola repite el último valor recibido.");
+    }
+  }
+
+  if (col.recept >= 0) {
+    var rec = within(180, col.recept);
+    if (rec.length >= 12) {
+      var avg = rec.reduce(function (s, x) { return s + num_(x.r[col.recept]); }, 0) / rec.length;
+      if (avg < ISS_LOW_PCT) {
+        avisar_(props, to, url, "AVISO_RECEPCION", today, "recepción del transmisor " + Math.round(avg) + " %",
+          "En las últimas 3 h la consola recibió en promedio el " + Math.round(avg) + " % de los paquetes del " +
+          "transmisor (lo normal es más de 95 %). Causas: batería o panel solar del ISS, antena, algo que tapa la señal.");
+      }
+    }
+  }
+
+  if (col.wu >= 0) {
+    var wu = within(UPLOAD_DOWN_MINUTES, col.wu);
+    if (wu.length >= 10 && wu.every(function (x) { return num_(x.r[col.wu]) >= WU_FAILS_DOWN; })) {
+      avisar_(props, to, url, "AVISO_WU", today, "Weather Underground no recibe datos",
+        "En las últimas " + (UPLOAD_DOWN_MINUTES / 60) + " h fallaron casi todos los envíos a Weather Underground " +
+        "(la planilla sí recibe). Revisa la clave de la estación en wunderground.com o si WU tiene problemas.");
+    }
+  }
+
+  var lastOk = props.getProperty("WINDY_ULTIMO_OK");
+  if (props.getProperty("WINDY_PASSWORD") && lastOk && within(30).length &&
+      nowMin - keyMinutes_(lastOk) > UPLOAD_DOWN_MINUTES) {
+    avisar_(props, to, url, "AVISO_WINDY", today, "Windy no recibe datos desde las " + lastOk.substring(11, 16),
+      "Windy rechaza o no responde los envíos. Última respuesta: " + props.getProperty("WINDY_ULTIMO") +
+      ".\nEjecuta estadoWindy() en el editor para ver el detalle.");
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Resumen diario por correo (activador diario a las SUMMARY_HOUR, ver activarAvisos)
+// ---------------------------------------------------------------------------------------
+
+var SUMMARY_HOUR = 8;
+var EXPECTED_RECORDS = 144;
+var WU_TRIES_PER_RECORD = 20;     // un envío cada 30 s en 10 min
+var MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+var RUMBOS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"];
+
+function resumenDiario() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone();
+  var nowKey = Utilities.formatDate(new Date(), tz, KEY_FORMAT);
+  var r = resumenDe_(ss, tz, shiftKey_(nowKey, -1440).substring(0, 10), nowKey);
+  var to = [Session.getEffectiveUser().getEmail()];
+  var extra = PropertiesService.getScriptProperties().getProperty("CORREOS_RESUMEN");
+  if (extra) to = to.concat(extra.split(",").map(function (s) { return s.trim(); }).filter(String));
+  MailApp.sendEmail(to.join(","), r.subject, r.body + "\n\nPlanilla: " + ss.getUrl());
+  Logger.log("Resumen enviado: " + r.subject);
+}
+
+/** Número con coma decimal */
+function fmt_(x, decimals) {
+  return Number(x).toFixed(decimals).replace(".", ",");
+}
+
+/** Asunto y texto del resumen del día `day` ("yyyy-MM-dd"); `nowKey` delimita la parte de sistema */
+function resumenDe_(ss, tz, day, nowKey) {
+  var sheet = getMainSheet_(ss);
+  var headers = getHeaders_(sheet);
+  var lastRow = sheet.getLastRow();
+  var n = Math.min(TAIL_ROWS, lastRow - 1);
+  var rows = n < 1 ? [] : sheet.getRange(lastRow - n + 1, 1, n, headers.length).getValues().filter(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (k) r[0] = k;
+    return k && k.substring(0, 10) === day;
+  });
+  var c = function (fragments) { return colIndex_(headers, fragments); };
+  var col = {
+    t: c(["temp ext"]), hi: c(["temp máx"]), lo: c(["temp mín"]), day: c(["lluvia d"]), month: c(["lluvia mes"]),
+    year: c(["lluvia a"]), gust: c(["ráfaga 10m"]), gustDir: c(["dir ráfaga"]), reset: c(["reinicio"]),
+    recept: c(["recepci"]), batC: c(["bater", "consola"]), batTx: c(["bater", "transmisor"]), wu: c(["fallos wu"])
+  };
+  var label = +day.substring(8, 10) + "-" + MESES[+day.substring(5, 7) - 1];
+  var problems = [];
+  var lines = [];
+
+  // ---- Tiempo ----
+  var hi = null, lo = null, gust = null;
+  rows.forEach(function (r) {
+    var vh = r[col.hi >= 0 && r[col.hi] !== "" ? col.hi : col.t], vl = r[col.lo >= 0 && r[col.lo] !== "" ? col.lo : col.t];
+    if (vh !== "" && (!hi || vh > hi.v)) hi = { v: vh, k: r[0] };
+    if (vl !== "" && (!lo || vl < lo.v)) lo = { v: vl, k: r[0] };
+    if (col.gust >= 0 && r[col.gust] !== "" && (!gust || r[col.gust] > gust.v)) {
+      gust = { v: r[col.gust], k: r[0], dir: r[col.gustDir] };
+    }
+  });
+  var last = rows.length ? rows[rows.length - 1] : null;
+  var rain = last && col.day >= 0 && last[col.day] !== "" ? num_(last[col.day]) : null;
+  lines.push("TIEMPO (" + label + ")");
+  if (lo && hi) {
+    lines.push("  Mínima  " + fmt_(lo.v, 1) + " °C a las " + lo.k.substring(11, 16) +
+      "     Máxima  " + fmt_(hi.v, 1) + " °C a las " + hi.k.substring(11, 16));
+  }
+  if (rain !== null) {
+    lines.push("  Lluvia  " + fmt_(rain, 1) + " mm   (mes " + fmt_(num_(last[col.month]), 1) +
+      " · año " + fmt_(num_(last[col.year]), 1) + ")");
+  }
+  if (gust) {
+    var dir = gust.dir !== "" && gust.dir !== undefined ? " del " + RUMBOS[Math.round(num_(gust.dir) / 22.5) % 16] : "";
+    lines.push("  Ráfaga  " + fmt_(gust.v, 0) + " km/h" + dir + " a las " + gust.k.substring(11, 16));
+  }
+
+  // ---- Estación ----
+  lines.push("", "ESTACIÓN");
+  var missing = EXPECTED_RECORDS - rows.length;
+  lines.push("  Datos       " + rows.length + "/" + EXPECTED_RECORDS + " registros (" +
+    Math.round(rows.length / EXPECTED_RECORDS * 100) + " %)");
+  if (rows.length < EXPECTED_RECORDS - 4) problems.push("Faltan " + missing + " de " + EXPECTED_RECORDS + " registros del día");
+
+  var boots = col.reset >= 0 ? rows.filter(function (r) { return r[col.reset] !== ""; }) : [];
+  var bootText = boots.map(function (r) { return r[col.reset] + " " + r[0].substring(11, 16); }).join(", ");
+  var watchdog = boots.some(function (r) { return r[col.reset] === "Watchdog"; });
+  if (boots.length >= 2 || watchdog) problems.push(boots.length + (boots.length === 1 ? " reinicio (" : " reinicios (") + bootText + ")");
+
+  var st = estadoDe_(ss, tz, day + " 00:00:00", nowKey);
+  lines.push("  Firmware    " + (st.fw ? "v" + st.fw : "?") + " · " + boots.length + " reinicios" +
+    (st.memMin !== null ? " · RAM mínima " + fmt_(st.memMin, 0) + " KB" : ""));
+  if (!st.reports) problems.push("El ESP32 no mandó su reporte de salud (pestaña Estado)");
+  if (st.memMin !== null && st.memMin < 30) problems.push("Memoria libre baja en el ESP32: " + fmt_(st.memMin, 0) + " KB");
+  if (st.errDisplay > 0) problems.push(st.errDisplay + " errores de la pantalla");
+
+  var rec = col.recept >= 0 ? rows.filter(function (r) { return r[col.recept] !== ""; }) : [];
+  var recAvg = rec.length ? rec.reduce(function (s, r) { return s + num_(r[col.recept]); }, 0) / rec.length : null;
+  var txLow = col.batTx >= 0 && rows.some(function (r) { return r[col.batTx] === "Baja"; });
+  lines.push("  Transmisor  recepción " + (recAvg !== null ? Math.round(recAvg) + " %" : "?") +
+    " · batería " + (txLow ? "BAJA" : "OK"));
+  if (recAvg !== null && recAvg < 90) problems.push("Recepción del transmisor " + Math.round(recAvg) + " % (lo normal es más de 95 %)");
+  if (txLow) problems.push("Batería del transmisor baja");
+
+  var batC = col.batC >= 0 ? rows.filter(function (r) { return r[col.batC] !== ""; }).map(function (r) { return num_(r[col.batC]); }) : [];
+  if (batC.length) {
+    var minBat = Math.min.apply(null, batC);
+    lines.push("  Consola     " + fmt_(minBat, 2) + " V");
+    if (minBat < CONSOLE_BATTERY_V) problems.push("Batería de la consola baja (" + fmt_(minBat, 2) + " V)");
+  }
+
+  var sends = ["Planilla " + (missing <= 4 ? "✅" : "⚠️")];
+  var wuRows = col.wu >= 0 ? rows.filter(function (r) { return r[col.wu] !== ""; }) : [];
+  if (wuRows.length) {
+    var wuFails = wuRows.reduce(function (s, r) { return s + num_(r[col.wu]); }, 0);
+    var wuTries = wuRows.length * WU_TRIES_PER_RECORD;
+    var wuBad = wuFails > wuTries * 0.05;
+    sends.push("WU " + (wuBad ? "⚠️" : "✅") + (wuFails ? " (" + wuFails + " fallos de " + wuTries + ")" : ""));
+    if (wuBad) problems.push("Weather Underground: " + wuFails + " envíos fallidos de " + wuTries);
+  }
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty("WINDY_PASSWORD")) {
+    var wc = JSON.parse(props.getProperty("WINDY_CONTEO") || "{}")[day] || [0, 0];
+    var windyBad = wc[0] === 0 || wc[1] > (wc[0] + wc[1]) * 0.2;
+    sends.push("Windy " + (windyBad ? "⚠️" : "✅") + (wc[1] ? " (" + wc[1] + " fallos de " + (wc[0] + wc[1]) + ")" : ""));
+    if (windyBad) problems.push("Windy: " + wc[0] + " envíos aceptados y " + wc[1] + " fallidos");
+  }
+  lines.push("  Envíos      " + sends.join("  "));
+
+  if (problems.length) {
+    lines.push("", "⚠️ PROBLEMAS");
+    problems.forEach(function (p) { lines.push("  - " + p); });
+  }
+
+  var subject = "El Gancho " + label;
+  if (!rows.length) {
+    subject += " · ⚠️ sin datos";
+  } else {
+    if (lo && hi) subject += " · " + fmt_(lo.v, 1) + " / " + fmt_(hi.v, 1) + " °C";
+    if (rain !== null) subject += " · " + fmt_(rain, 1) + " mm";
+    subject += problems.length ? " · ⚠️ " + problems.length + (problems.length === 1 ? " problema" : " problemas")
+      : " · ✅ todo bien";
+  }
+  return { subject: subject, body: lines.join("\n"), problems: problems };
+}
+
+/** Reportes de la pestaña Estado entre `fromKey` y `toKey`: firmware, RAM mínima, errores de pantalla */
+function estadoDe_(ss, tz, fromKey, toKey) {
+  var out = { reports: 0, fw: null, memMin: null, errDisplay: 0 };
+  var sheet = ss.getSheetByName(STATUS_SHEET_NAME);
+  if (!sheet || sheet.getLastRow() < 2) return out;
+  var headers = getHeaders_(sheet);
+  var cFw = headers.indexOf("Firmware"), cMem = headers.indexOf("RAM mínima (KB)"), cDisp = headers.indexOf("Errores pantalla");
+  var n = Math.min(20, sheet.getLastRow() - 1);
+  sheet.getRange(sheet.getLastRow() - n + 1, 1, n, headers.length).getValues().forEach(function (r) {
+    var k = keyOf_(r[0], tz);
+    if (!k || k < fromKey || k > toKey) return;
+    out.reports++;
+    if (cFw >= 0 && r[cFw] !== "") out.fw = r[cFw];
+    if (cMem >= 0 && r[cMem] !== "" && (out.memMin === null || r[cMem] < out.memMin)) out.memMin = num_(r[cMem]);
+    if (cDisp >= 0) out.errDisplay += num_(r[cDisp]);
+  });
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -753,6 +1069,14 @@ var RAIN_RATE_MMH = 10;        // lluvia intensa (intensidad)
 var RAIN_DAY_MM = 20;          // lluvia intensa (acumulado del día)
 var CONSOLE_BATTERY_V = 3.5;   // batería de la consola baja
 var WEATHER_LOOKBACK_MINUTES = 180;   // solo filas recientes (no avisar por registros recuperados viejos)
+
+/** Manda el aviso solo si no se mandó ya en este período (noche, día o semana) */
+function avisar_(props, to, url, prop, period, subject, body) {
+  if (props.getProperty(prop) === period) return;
+  MailApp.sendEmail(to, "Estación El Gancho: " + subject, body + "\n\nPlanilla: " + url);
+  props.setProperty(prop, period);
+  Logger.log("Aviso enviado: " + subject);
+}
 
 /**
  * Un correo por evento: helada / riesgo de helada una vez por noche, ráfaga y lluvia una vez por
@@ -785,10 +1109,7 @@ function revisarClima_(sheet, tz, nowKey, props, to, url) {
   });
 
   function once(prop, period, subject, body) {
-    if (props.getProperty(prop) === period) return;
-    MailApp.sendEmail(to, "Estación El Gancho: " + subject, body + "\n\nPlanilla: " + url);
-    props.setProperty(prop, period);
-    Logger.log("Aviso enviado: " + subject);
+    avisar_(props, to, url, prop, period, subject, body);
   }
   function hm(k) { return k.substring(11, 16); }
   // La noche de una helada se identifica por la fecha de 12 h antes (03:00 del 13 -> noche del 12)

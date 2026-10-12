@@ -110,16 +110,75 @@ def test_format_age():
 # --- cards ---
 
 def test_rotation_alternates_big_temperature_and_forecast(screen, clock):
-    titles = [show(screen, clock, "14:%02d" % i, WEATHER).header()[0][0] for i in range(12)]
-    assert titles[0::2] == ["AHORA", "PRONOST."] * 3
-    assert titles[1::2] == ["EXTERIOR", "VIENTO", "LLUVIA", "SOL/LUNA", "SISTEMA", "SUBIDAS"]
+    titles = [show(screen, clock, "14:%02d" % i, WEATHER).header()[0][0] for i in range(22)]
+    assert titles[0::2][:5] == ["AHORA", "PRONOST.", "AHORA", "PRONOST.", "AHORA"]
+    # Nothing wrong: no PROBLEMA card; SOL/LUNA in the first round, not in the second
+    assert titles[1::2] == ["HOY", "VIENTO", "LLUVIA", "AIRE", "SOL/LUNA",
+                            "HOY", "VIENTO", "LLUVIA", "AIRE", "HOY", "VIENTO"]
+    assert "SISTEMA" not in titles and "SUBIDAS" not in titles and "PROBLEMA" not in titles
+
+
+def test_each_card_asks_the_main_loop_for_its_time(screen, clock):
+    assert screen.card_seconds_left(5) == 5                    # nothing shown yet
+    show(screen, clock, "14:00", WEATHER)                       # AHORA
+    assert 5.0 < screen.card_seconds_left(5) <= dm.CARD_SECONDS["ahora"]
+    show(screen, clock, "14:01", WEATHER)                       # HOY
+    assert screen.card_seconds_left(5) > 9
+    raining = dict(WEATHER, rain_rate_mm_per_hr=3.0)
+    for i in range(6):
+        if show(screen, clock, "14:%02d" % (2 + i), raining).header()[0][0] == "LLUVIA":
+            break
+    assert screen.card_seconds_left(5) > dm.RAIN_CARD_SECONDS - 1
+    show(screen, clock, "23:30", WEATHER)                       # night: screen off, default pace
+    assert screen.card_seconds_left(5) == 5
+
+
+def test_today_card_uses_console_extremes_and_live_reading(screen, clock):
+    today = dict(WEATHER, today_temp_hi_c=18.2, today_temp_hi_time="15:10", today_temp_lo_c=3.1,
+                 today_temp_lo_time="06:40", today_gust_kmh=45.1, today_gust_time="14:40", rain_day_mm=2.5)
+    texts = card_texts(screen, clock, today, "HOY")
+    assert texts == ["Max  18.2C 15:10", "Min   3.1C 06:40", "Raf  45kmh 14:40", "Lluvia 2.5 mm"]
+    hotter = dict(today, temp_out_c=19.0)                       # live reading beyond the console's max
+    assert card_texts(screen, clock, hotter, "HOY")[0].startswith("Max  19.0C 15:")   # time of now
+    unknown = dict(WEATHER)                                     # no HILOWS yet: live temp, no gust
+    texts = card_texts(screen, clock, unknown, "HOY")
+    assert texts[0].startswith("Max  15.3C") and texts[2] == "Raf   --kmh"
+
+
+def test_problem_card_only_when_something_is_wrong(screen, clock):
+    screen.update_cloud_status(gdrive_ok=True)
+    bad = dict(WEATHER, console_battery_v=3.3, tx_battery_status=1)
+    screen.set_iss_recept(62.0)
+    texts = card_texts(screen, clock, bad, "PROBLEMA")
+    assert texts == ["Bat. transm baja", "Bat.consola 3.3V", "Recepcion 62%"]
+    assert all(len(t) <= 16 for t in texts)
+
+
+def test_weather_alert_in_header_by_day_only(screen, clock):
+    cold = dict(WEATHER, temp_out_c=1.4)
+    header = show(screen, clock, "08:00", cold).header()
+    assert [t[0] for t in header] == ["HELADA?", "1.4C"] and screen.oled.lit(0, 4) == 4 * 128   # inverted bar
+    assert [t[0] for t in show(screen, clock, "08:01", dict(cold, temp_out_c=-0.6)).header()] == ["HELADA", "-0.6C"]
+    windy = dict(WEATHER, windgustkmh_10m=56.3)
+    assert [t[0] for t in show(screen, clock, "15:00", windy).header()] == ["RAFAGA", "56km/h"]
+    show(screen, clock, "23:30", dict(cold, temp_out_c=-3.0))   # at night it does not light the room
+    assert screen.oled.cmds[-1] == "off"
+
+
+def test_boot_button_shows_diagnostic_cards_for_a_while(screen, clock):
+    screen.set_system_info(fw="1.0.18", reset="Watchdog")
+    screen.start_diagnostics()
+    titles = [show(screen, clock, "15:%02d" % i, WEATHER).header()[0][0] for i in range(3)]
+    assert titles == ["SISTEMA", "SUBIDAS", "SISTEMA"]
+    clock.advance(dm.DIAG_SECONDS)
+    assert show(screen, clock, "15:10", WEATHER).header()[0][0] not in ("SISTEMA", "SUBIDAS")
 
 
 def card_texts(screen, clock, data, title):
     for i in range(14):
         oled = show(screen, clock, "15:%02d" % i, data)
         if oled.header()[0][0] == title:
-            return [t[0].strip() for t in oled.last_texts()]
+            return [t[0].strip() for t in oled.last_texts() if t[2] > 4]     # body, not the header
     raise AssertionError(title + " no aparecio en la rotacion")
 
 
@@ -150,7 +209,7 @@ def test_card_error_is_shown_not_swallowed(screen, clock, monkeypatch):
     monkeypatch.setattr(screen, "_get_card_content", broken)
     oled = show(screen, clock, "14:01", WEATHER)
     texts = [t[0] for t in oled.last_texts()]
-    assert "ERROR PANTALLA" in texts and any("exterior" in t for t in texts)
+    assert "ERROR PANTALLA" in texts and any("hoy" in t for t in texts)
     assert screen.errors == 1 and "dato raro" in screen.last_error
 
 
@@ -167,8 +226,7 @@ def test_big_temperature_fits_with_three_digits_and_sign(screen, clock):
 def test_system_card(screen, clock):
     screen.set_system_info(fw="1.0.13", reset="Reset hardware")
     screen.set_iss_recept(99.6)
-    screen.card_index = dm._ROTATION.index("sistema")
-    screen.last_card_title = "AHORA"
+    screen.start_diagnostics()
     oled = show(screen, clock, "14:00", WEATHER)
     lines = [t[0] for t in oled.last_texts() if t[2] > 4]
     assert lines == ["FW: v1.0.13", "ISS 100% Tx OK", "Consola: 4.24V", "Inicio Reset HW"]

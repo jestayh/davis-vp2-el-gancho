@@ -55,9 +55,14 @@ from src.davis_reader import (
     query_station, sync_console_time, log, format_timestamp_local, format_timestamp_utc,
     clock_is_valid, sync_ntp
 )
+try:
+    from src.davis_reader import query_hilows
+except ImportError:      # an outdated davis_reader module must never stop the station
+    def query_hilows(*args, **kwargs):
+        return None
 from src.weather_underground import upload
 from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailyStats
-from src.display import WeatherDisplay, WAKE_SECONDS
+from src.display import WeatherDisplay, WAKE_SECONDS, DIAG_SECONDS
 from src.google_sheets import upload_to_google_sheets
 try:
     from src.google_sheets import upload_status
@@ -86,11 +91,34 @@ NTP_RESYNC_SECONDS = 86400
 GAP_RECOVERY_MAX_FAILURES = 6
 # The console writes its archive record a few seconds after each 10-min mark
 ARCHIVE_SETTLE_SECONDS = 15
+# Today's extremes (HOY card) are read from the console this often
+HILOWS_EVERY_SECONDS = 300
+# Longest wait between two main-loop cycles, whatever the card on screen asks for
+MAX_CYCLE_SECONDS = 15
+BOOT_BUTTON_PIN = 0
 
 IS_ESP32 = sys.platform == "esp32"
 _led_p = STATUS_LED_PIN if globals().get("ENABLE_STATUS_LED", True) else None
 _led_m = globals().get("STATUS_LED_MODE", "HEARTBEAT")
 display = WeatherDisplay(led_pin=_led_p, led_mode=_led_m)
+
+# Set by the BOOT button interrupt, handled by the main loop (no allocation inside the interrupt)
+_boot_pressed = [False]
+
+
+def _on_boot_button(pin):
+    _boot_pressed[0] = True
+
+
+def setup_boot_button():
+    """BOOT button (GPIO 0, free after boot): shows the SISTEMA/SUBIDAS cards for a visit"""
+    if not IS_ESP32:
+        return
+    try:
+        from machine import Pin
+        Pin(BOOT_BUTTON_PIN, Pin.IN, Pin.PULL_UP).irq(trigger=Pin.IRQ_FALLING, handler=_on_boot_button)
+    except Exception as e:
+        log("[PANTALLA] Boton BOOT no disponible: {}".format(e))
 
 
 def connect_wifi_if_needed(show_display=False):
@@ -409,6 +437,11 @@ def main(max_cycles=None):
     gap_until = None          # first record uploaded after the gap (exclusive end of the recovery)
     gap_failures = 0
     backfill_pending = None   # unknown until the first successful upload
+    hilows = {}               # today's extremes from the console, merged into every reading
+    next_hilows = 0
+    wu_fail_slot = 0          # failed WU uploads since the last Sheets record (sent with it)
+    display_errors_reported = 0
+    setup_boot_button()
 
     try:
         while max_cycles is None or cycle < max_cycles:
@@ -456,6 +489,10 @@ def main(max_cycles=None):
                         health.err_console += 1
                     if fresh:
                         data = fresh
+                        if time.time() >= next_hilows:
+                            next_hilows = time.time() + HILOWS_EVERY_SECONDS
+                            hilows = query_hilows(DAVIS_HOST, DAVIS_PORT, timeout=SOCKET_TIMEOUT_SECONDS) or hilows
+                        data.update(hilows)
                         cur_t = data.get("temp_out_c")
                         if cur_t is not None:
                             if slot_temp_hi is None or cur_t > slot_temp_hi:
@@ -479,6 +516,7 @@ def main(max_cycles=None):
                     uploaded_wu = upload(WU_STATION_ID, WU_API_KEY, data, timeout=SOCKET_TIMEOUT_SECONDS)
                     if not uploaded_wu:
                         health.err_wu += 1
+                        wu_fail_slot += 1
                     last_wu_upload_time = current_time
                     display.update_cloud_status(wu_ok=uploaded_wu, timestamp_str=data.get("timestamp"))
                     if uploaded_wu:
@@ -522,6 +560,9 @@ def main(max_cycles=None):
 
                     if reset_cause:
                         record_data["reset_cause"] = reset_cause
+                    # Failed WU uploads in this interval (~20 attempts): the Apps Script warns when WU stops
+                    record_data["wu_err"] = wu_fail_slot
+                    wu_fail_slot = 0
 
                     # Wind samples (and ISS reception) of this interval come from the console's own
                     # archive record, written a few seconds after the slot starts
@@ -594,10 +635,12 @@ def main(max_cycles=None):
                                     backfill_pending = False
 
                                 # Health report to the "Estado" tab: right after boot, then daily
+                                health.err_display = display.errors - display_errors_reported
                                 if health.due() and upload_status(GOOGLE_APPS_SCRIPT_URL, health.report(),
                                                                   format_timestamp_local()):
                                     log("[ESTADO] Reporte diario enviado")
                                     health.sent()
+                                    display_errors_reported = display.errors
 
                             # The Sheets proxy announces the latest published firmware: update without waiting a day
                             fw_hint = gsheets.FW_HINT
@@ -656,11 +699,19 @@ def main(max_cycles=None):
             # Update status LED timer (ensures 20s solid light turns off accurately)
             display.check_led_timer()
 
-            # Maintain smooth card rotation interval
+            # Next cycle when the card on screen has been shown its time (CARD_SECONDS in the
+            # display); with the screen off, every CARD_ROTATION_SECONDS
             elapsed = time.time() - cycle_start
-            sleep_time = CARD_ROTATION_SECONDS - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            sleep_time = min(MAX_CYCLE_SECONDS, display.card_seconds_left(CARD_ROTATION_SECONDS - elapsed))
+            # In short steps, so a press of BOOT switches to the diagnostic cards at once
+            while sleep_time > 0 and not _boot_pressed[0]:
+                step = min(0.2, sleep_time)
+                time.sleep(step)
+                sleep_time -= step
+            if _boot_pressed[0]:
+                _boot_pressed[0] = False
+                log("[PANTALLA] Boton BOOT: tarjetas de diagnostico por {} s".format(DIAG_SECONDS))
+                display.start_diagnostics()
 
         log("Execution halted normally.")
 

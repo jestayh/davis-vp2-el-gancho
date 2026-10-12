@@ -26,7 +26,11 @@ class Range {
   setValue(x) { return this.setValues([[x]]); }
   getValue() { return this.getValues()[0][0]; }
   setFontWeight() { return this; }
-  setBackground() { return this; }
+  setBackground(color) {
+    this.sh.bg = this.sh.bg || {};
+    this.sh.bg[this.r + "," + this.c] = color;
+    return this;
+  }
   setFontColor() { return this; }
   sort() {
     const body = this.sh.rows.splice(this.r - 1, this.nr);
@@ -93,7 +97,13 @@ function loadScript(scriptPath) {
       deleteTrigger(t) { this.triggers = this.triggers.filter((x) => x !== t); },
       newTrigger(fn) {
         const self = this;
-        return { timeBased: () => ({ everyMinutes: (m) => ({ create: () => self.triggers.push({ fn, m, getHandlerFunction: () => fn }) }) }) };
+        const add = (t) => ({ create: () => self.triggers.push(Object.assign({ fn, getHandlerFunction: () => fn }, t)) });
+        return {
+          timeBased: () => ({
+            everyMinutes: (m) => add({ m }),
+            everyDays: (d) => ({ atHour: (h) => add({ d, h }) }),
+          }),
+        };
       },
     },
     UrlFetchApp: {

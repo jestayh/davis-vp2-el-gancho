@@ -81,8 +81,9 @@ def upload_to_google_sheets(script_url, data, timeout=12):
         "solar_radiation_wm2": data.get("solar_radiation_wm2"),
         "uv_index": data.get("uv_index"),
     }
-    # Optional: why the ESP32 last restarted (first row after boot) and target tab ("consola")
-    for key in ("reset_cause", "destino"):
+    # Optional: why the ESP32 last restarted (first row after boot), target tab ("consola") and
+    # failed WU uploads in the interval
+    for key in ("reset_cause", "destino", "wu_err"):
         if data.get(key):
             payload[key] = data[key]
     return _post_json(script_url, payload, timeout)
