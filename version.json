@@ -1,12 +1,12 @@
 {
-  "version": "1.0.19",
+  "version": "1.0.20",
   "date": "2026-10-12",
-  "description": "Los reinicios por actualizacion se distinguen de las caidas",
+  "description": "Una sola conexion a la consola por lectura (maximas y minimas incluidas)",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "7f3ebc93669d3822c63995d6f5bf0654182d1a9e1b9b176f96c3b411e783e058"
+      "sha256": "52ada0efced671a2cc5cd61338ae2eb5dcc2a467381376c61a3e9b2cca3210a3"
     },
     {
       "remote": "src/display.mpy",
@@ -16,7 +16,7 @@
     {
       "remote": "src/davis_reader.mpy",
       "local": "src/davis_reader.mpy",
-      "sha256": "72c5a41cf7a0148a24d54de688434fa4fe0a9334375161bccd07ba32a928af4f"
+      "sha256": "a31cb821f800c2a2e4502f7de39b084fe0ac3cdeed8e28a433a276d85a4a2015"
     },
     {
       "remote": "src/data_logger.mpy",
