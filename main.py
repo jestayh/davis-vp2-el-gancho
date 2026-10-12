@@ -552,7 +552,7 @@ def main(max_cycles=None):
                     last_logged_slot = current_slot
 
                 # 4. Update OLED Display (slides vertically to next rotating card every 5s)
-                display.show_weather(data, cycle=cycle)
+                display.show_weather(data, cycle=cycle, now_str=format_timestamp_local())
 
                 # 5. Update Daily In-Memory Statistics
                 stats.update(data, True)

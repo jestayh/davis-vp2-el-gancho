@@ -70,6 +70,30 @@ _TARGET_Y = (18, 29, 41, 53)
 _SHIFTS = (6, 14, 22, 30, 38, 48)
 _FIRST_SHIFTS = (32, 20, 10, 0)
 
+# OLED pixels wear out with use: the header is drawn as text over a thin line (a solid bar would
+# stay lit 24/7) and is only inverted to flag a problem. At night the screen goes dark unless
+# there is a problem, which is then shown at low brightness.
+NIGHT_START_HOUR = 23
+NIGHT_END_HOUR = 7
+CONTRAST_DAY = 0x60
+CONTRAST_NIGHT = 0x01
+# The console is polled every 30 s: with no new reading for this long the data on screen is stale
+STALE_DATA_SECONDS = 120
+
+
+def _is_night(hour):
+    if NIGHT_START_HOUR > NIGHT_END_HOUR:
+        return hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
+    return NIGHT_START_HOUR <= hour < NIGHT_END_HOUR
+
+
+def _format_age(seconds):
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return "{}m".format(minutes)
+    hours = minutes // 60
+    return "{}h".format(hours) if hours < 100 else "99h+"
+
 
 class WeatherDisplay:
     def __init__(self, sda_pin=21, scl_pin=22, oled_addr=0x3C, width=128, height=64, led_pin=2, led_mode="HEARTBEAT"):
@@ -90,6 +114,10 @@ class WeatherDisplay:
         self.gdrive_datetime = "--/-- --:--:--"
         self.ip_addr = "192.168.1.6"
         self.wu_station_id = "ISANTA2468"
+        self._last_data_ts = None
+        self._last_data_change = time.time()
+        self._screen_off = False
+        self._contrast = None
 
         if not IS_ESP32:
             return
@@ -192,9 +220,7 @@ class WeatherDisplay:
         try:
             t_str = str(timestamp_str)[11:19] if timestamp_str and len(str(timestamp_str)) >= 19 else ""
             self.oled.fill(0)
-            # Inverted top bar (fills the physical 16px yellow zone)
-            self.oled.fill_rect(0, 0, 128, 16, 1)
-            self.oled.text(_center("GOOGLE SHEETS"), 0, 4, 0)
+            self._draw_header(_center("GOOGLE SHEETS"))
 
             # Blue body (48px)
             self.oled.text(_center("GUARDADO EXITOSO"), 0, 22, 1)
@@ -261,9 +287,7 @@ class WeatherDisplay:
             return
         try:
             self.oled.fill(0)
-            # Inverted header bar (fills the physical 16px yellow zone)
-            self.oled.fill_rect(0, 0, 128, 16, 1)
-            self.oled.text(line1[:16], 2, 4, 0)
+            self._draw_header(line1[:16])
 
             if line2:
                 self.oled.text(line2[:16], 2, 20, 1)
@@ -274,6 +298,49 @@ class WeatherDisplay:
             self.oled.show()
         except Exception:
             pass
+
+    def _draw_header(self, left, right="", alert=False):
+        """Header in the physical 16px yellow band: text over a thin line, or an inverted bar for alerts"""
+        if alert:
+            self.oled.fill_rect(0, 0, 128, 16, 1)
+        else:
+            self.oled.hline(0, 14, 128, 1)
+        color = 0 if alert else 1
+        self.oled.text(left, 2, 4, color)
+        if right:
+            self.oled.text(right, 126 - 8 * len(right), 4, color)
+
+    def _set_power(self, on, contrast):
+        if not on:
+            if not self._screen_off:
+                self.oled.poweroff()
+                self._screen_off = True
+            return
+        if self._screen_off:
+            self.oled.poweron()
+            self._screen_off = False
+        if contrast != self._contrast:
+            self.oled.contrast(contrast)
+            self._contrast = contrast
+
+    def _status_header(self, card_title, data, now_str):
+        """(left, right, alert, night) for the card header, from data freshness, uploads and clock"""
+        ts = data.get("timestamp")
+        now = time.time()
+        if ts != self._last_data_ts:
+            self._last_data_ts = ts
+            self._last_data_change = now
+
+        clock = now_str if now_str and now_str[:4] >= "2025" else None
+        night = clock is not None and _is_night(int(clock[11:13]))
+        time_hm = clock[11:16] if clock else ""
+
+        stale_for = now - self._last_data_change
+        if stale_for >= STALE_DATA_SECONDS:
+            return "SIN DATOS", _format_age(stale_for), True, night
+        if self.gdrive_status == "ERR":
+            return "NO SHEETS", time_hm, True, night
+        return card_title[:9], time_hm, False, night
 
     def show_wifi_status(self, ssid, ip_addr=None):
         """Show WiFi connection progress"""
@@ -387,10 +454,13 @@ class WeatherDisplay:
                 "  " + self.gdrive_datetime
             ]
 
-    def show_weather(self, data, cycle=1, uploaded_wu=None, uploaded_gdrive=None, animate=True):
+    def show_weather(self, data, cycle=1, uploaded_wu=None, uploaded_gdrive=None, animate=True, now_str=None):
         """
         Render a weather card with vertical slide-up transition.
-        Header shows [CARD_TITLE        HH:MM] in the physical 16px yellow band.
+        Header shows [CARD_TITLE        HH:MM] in the physical 16px yellow band, with HH:MM from
+        now_str (ESP32 local clock). It turns into an inverted alert when the console has not
+        answered for STALE_DATA_SECONDS ([SIN DATOS 5m]) or the last Sheets upload failed.
+        Between NIGHT_START_HOUR and NIGHT_END_HOUR the screen is off unless there is an alert.
         Cycles across 7 cards:
           0: EXTERIOR
           1: VIENTO
@@ -418,21 +488,20 @@ class WeatherDisplay:
             # Advance card index for next cycle (0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 0)
             self.card_index = (self.card_index + 1) % 7
 
-            # Extract current local time HH:MM for header bar
-            ts = str(data.get("timestamp", ""))
-            time_hm = ts[11:16] if len(ts) >= 16 else ""
+            left, right, alert, night = self._status_header(card_title, data, now_str)
+            if night and not alert:
+                self._set_power(False, None)
+                self.last_card_lines = None  # gentle entrance when the screen comes back on
+                return
+            self._set_power(True, CONTRAST_NIGHT if night else CONTRAST_DAY)
 
             if animate and self.last_card_lines is not None:
                 # Vertical slide-up animation: old card rolls up & out, new card rolls up & in
                 n_lines = len(lines)
+                old_left = left if alert else (self.last_card_title or card_title)[:9]
                 for s in _SHIFTS:
                     self.oled.fill(0)
-                    # Top header bar (fills the physical 16px yellow band)
-                    self.oled.fill_rect(0, 0, 128, 16, 1)
-                    active_title = card_title if s >= 24 else (self.last_card_title or card_title)
-                    self.oled.text(active_title[:9], 2, 4, 0)
-                    if time_hm:
-                        self.oled.text(time_hm, 84, 4, 0)
+                    self._draw_header(left if s >= 24 else old_left, right, alert)
 
                     # Old lines scrolling up and disappearing under Y=17 (cyan boundary)
                     for i in range(len(self.last_card_lines)):
@@ -454,10 +523,7 @@ class WeatherDisplay:
                 n_lines = len(lines)
                 for off in _FIRST_SHIFTS:
                     self.oled.fill(0)
-                    self.oled.fill_rect(0, 0, 128, 16, 1)
-                    self.oled.text(card_title[:9], 2, 4, 0)
-                    if time_hm:
-                        self.oled.text(time_hm, 84, 4, 0)
+                    self._draw_header(left, right, alert)
                     for i in range(n_lines):
                         y = _TARGET_Y[i] + off
                         if 17 <= y <= 56:
@@ -467,10 +533,7 @@ class WeatherDisplay:
 
             # Final static frame (100% stable in cyan zone)
             self.oled.fill(0)
-            self.oled.fill_rect(0, 0, 128, 16, 1)
-            self.oled.text(card_title[:9], 2, 4, 0)
-            if time_hm:
-                self.oled.text(time_hm, 84, 4, 0)
+            self._draw_header(left, right, alert)
             for i in range(len(lines)):
                 self.oled.text(lines[i][:16], 2, _TARGET_Y[i], 1)
             self.oled.show()
