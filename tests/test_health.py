@@ -35,10 +35,14 @@ def test_counters_and_lowest_ram_start_over_after_each_report(monkeypatch):
     h.err_console += 2
     h.err_sheets += 1
     h.recoveries += 1
+    h.sys_mem(32000)
+    h.sys_mem(23040)                                  # lowest free system memory: 22.5 KB
+    h.sys_mem(None)
     r = h.report()                                    # samples current RAM: 70000
     assert r == {"fw": "1.0.15", "uptime_h": 0.0, "reset_cause": "Watchdog", "mem_free_kb": 68.4,
                  "mem_min_kb": 50.0, "rssi": -67, "err_console": 2, "err_sheets": 1, "err_wu": 0,
-                 "recoveries": 1, "err_display": 0, "ssid": "2.4G_Casa", "ota_route": "Proxy HTTP"}
+                 "recoveries": 1, "err_display": 0, "sys_min_kb": 22.5, "ssid": "2.4G_Casa",
+                 "ota_route": "Proxy HTTP"}
     h.sent()
     h.tick()                                          # RAM 60000
     r = h.report()

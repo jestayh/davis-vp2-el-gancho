@@ -171,7 +171,9 @@ _FC_PIECES = {
     "z": "Ventoso, posible giro al O/NO/N.",
     "X": "Pronostico requiere 3 h de datos.",
 }
-# Rule number -> pieces (index = rule number, 0 to 196)
+# Rule number -> pieces (index = rule number, 0 to 196). Kept as one string and searched on demand:
+# split into a list it would hold ~5 KB of small strings in RAM for good.
+_FC_COUNT = 197
 _FC_RULES = (
     "A,B,C,D,B,E,F,F,G,F,"          # 0-9
     "F,B,Hf,F,B,Ie,B,F,B,Ic,"       # 10-19
@@ -193,14 +195,19 @@ _FC_RULES = (
     "F,B,Jaz,Iaz,F,B,Jdz,Idz,Lnz,F,"  # 170-179
     "B,Lbmz,Mkz,Mbmz,Li,F,B,Lhz,Mi,Mh,"  # 180-189
     "F,B,Lcmx,X,A,A,A"              # 190-196
-).split(",")
+)
 
 
 def forecast_message(rule):
     """Spanish forecast message for a Davis forecast rule number (None if unknown)"""
-    if rule is None or not 0 <= rule < len(_FC_RULES):
+    if rule is None or not 0 <= rule < _FC_COUNT:
         return None
-    return " ".join(_FC_PIECES[p] for p in _FC_RULES[rule])
+    start = 0
+    for _ in range(rule):
+        start = _FC_RULES.index(",", start) + 1
+    end = _FC_RULES.find(",", start)
+    code = _FC_RULES[start:end] if end >= 0 else _FC_RULES[start:]
+    return " ".join(_FC_PIECES[p] for p in code)
 
 
 def _forecast_kind(icons, night):

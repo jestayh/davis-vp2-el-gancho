@@ -14,6 +14,7 @@ except ImportError:
     except ImportError:
         pass
 
+import io
 import sys
 
 IS_ESP32 = sys.platform == "esp32"
@@ -102,6 +103,45 @@ def upload_status(script_url, status, timestamp, timeout=12):
     return _post_json(script_url, payload, timeout)
 
 
+# MicroPython's json.dump only writes to real streams: io.IOBase subclasses qualify (they get
+# UTF-8 bytes); CPython passes str
+class _ByteCounter(io.IOBase):
+    """json.dump target that only counts the UTF-8 bytes (for Content-Length)"""
+    def __init__(self):
+        self.n = 0
+
+    def write(self, s):
+        size = len(s.encode("utf-8")) if isinstance(s, str) else len(s)
+        self.n += size
+        return size
+
+
+class _ChunkWriter(io.IOBase):
+    """Buffers json.dump's many small writes into fixed 256-byte socket writes"""
+    def __init__(self, sock, size=256):
+        self.sock = sock
+        self.buf = bytearray(size)
+        self.mv = memoryview(self.buf)
+        self.n = 0
+
+    def write(self, s):
+        b = s.encode("utf-8") if isinstance(s, str) else s
+        size = len(b)
+        if self.n + size > len(self.buf):
+            self.flush()
+        if size > len(self.buf):
+            self.sock.write(b)
+            return size
+        self.mv[self.n:self.n + size] = b       # copied now: MicroPython may reuse b
+        self.n += size
+        return size
+
+    def flush(self):
+        if self.n:
+            self.sock.write(self.mv[:self.n])
+            self.n = 0
+
+
 def _post_json(script_url, payload, timeout=12):
     """POST payload as JSON to the Apps Script / proxy. Returns True on success."""
     if not script_url or not (script_url.startswith("https://") or script_url.startswith("http://")):
@@ -139,18 +179,14 @@ def _post_json(script_url, payload, timeout=12):
                 host = path
                 uri = "/"
 
-            # Pre-build request body before opening socket to minimize heap
-            body = ujson.dumps(payload).encode("utf-8")
-            req = (
-                b"POST " + uri.encode("ascii") + b" HTTP/1.0\r\n" +
-                b"Host: " + host.encode("ascii") + b"\r\n" +
-                b"User-Agent: Davis-ESP32\r\n" +
-                b"Content-Type: application/json\r\n" +
-                b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n" +
-                b"Connection: close\r\n\r\n" +
-                body
-            )
-            del body
+            # The JSON body is streamed in small pieces instead of being built as one string:
+            # MicroPython takes memory from the system for large blocks and never gives it back,
+            # and without that memory the ESP32 cannot open sockets any more (OSError -203)
+            count = _ByteCounter()
+            ujson.dump(payload, count)
+            head = ("POST {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: Davis-ESP32\r\n"
+                    "Content-Type: application/json\r\nContent-Length: {}\r\n"
+                    "Connection: close\r\n\r\n").format(uri, host, count.n)
             gc.collect()
 
             ai = socket.getaddrinfo(host, port)
@@ -171,8 +207,11 @@ def _post_json(script_url, payload, timeout=12):
             else:
                 ss = s
 
-            ss.write(req)
-            del req
+            ss.write(head)
+            out = _ChunkWriter(ss)
+            ujson.dump(payload, out)
+            out.flush()
+            del out, head
             raw_resp = ss.readline()
 
             # Scan response headers for the firmware version hint

@@ -91,6 +91,11 @@ HILOWS_EVERY_SECONDS = 300
 # Longest wait between two main-loop cycles, whatever the card on screen asks for
 MAX_CYCLE_SECONDS = 15
 BOOT_BUTTON_PIN = 0
+# MicroPython grows its heap with system memory and never returns it; below this much free system
+# memory the ESP32 cannot open sockets (OSError -203). Restart after LOW_SYS_MEM_CYCLES cycles.
+LOW_SYS_MEM_BYTES = 8 * 1024
+LOW_SYS_MEM_CYCLES = 6
+RESET_REASON_FILE = "data/reset_reason.txt"
 
 IS_ESP32 = sys.platform == "esp32"
 _led_p = STATUS_LED_PIN if globals().get("ENABLE_STATUS_LED", True) else None
@@ -279,10 +284,48 @@ def run_ota_check():
         gc.collect()
 
 
+def restart_because(reason):
+    """machine.reset() leaving the reason for the next boot to report (see read_reset_cause)"""
+    log("[SISTEMA] Reiniciando: {}".format(reason))
+    try:
+        with open(RESET_REASON_FILE, "w") as f:
+            f.write(reason)
+    except Exception:
+        pass
+    import machine
+    machine.reset()
+
+
+def take_reset_reason(path=RESET_REASON_FILE):
+    """Reason saved by restart_because() before the last reset (read once), or None"""
+    try:
+        import os
+        with open(path, "r") as f:
+            reason = f.read().strip()
+        os.remove(path)
+        return reason or None
+    except Exception:
+        return None
+
+
+def system_mem_free():
+    """Free system (ESP-IDF) memory in bytes, where WiFi and sockets live; None on a PC"""
+    if not IS_ESP32:
+        return None
+    try:
+        import esp32
+        return sum(h[1] for h in esp32.idf_heap_info(esp32.HEAP_DATA))
+    except Exception:
+        return None
+
+
 def read_reset_cause():
     """Why the ESP32 started (power-up after unplugging vs. a crash/watchdog), or None on PC"""
     if not IS_ESP32:
         return None
+    reason = take_reset_reason()
+    if reason:
+        return reason
     try:
         import machine
         cause = machine.reset_cause()
@@ -458,6 +501,7 @@ def main(max_cycles=None):
     next_hilows = 0
     wu_fail_slot = 0          # failed WU uploads since the last Sheets record (sent with it)
     display_errors_reported = 0
+    low_mem_cycles = 0
     setup_boot_button()
 
     try:
@@ -716,6 +760,16 @@ def main(max_cycles=None):
 
             # Uptime and lowest free RAM for the daily health report
             health.tick()
+            sys_free = system_mem_free()
+            health.sys_mem(sys_free)
+            if sys_free is not None and sys_free < LOW_SYS_MEM_BYTES:
+                low_mem_cycles += 1
+                log("[SISTEMA] Memoria del sistema baja: {} bytes ({}/{})".format(sys_free, low_mem_cycles, LOW_SYS_MEM_CYCLES))
+                if low_mem_cycles >= LOW_SYS_MEM_CYCLES:
+                    # Nothing is lost: the console archive fills the gap after the restart
+                    restart_because("Memoria agotada")
+            else:
+                low_mem_cycles = 0
 
             # Update status LED timer (ensures 20s solid light turns off accurately)
             display.check_led_timer()

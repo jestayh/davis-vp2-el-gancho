@@ -82,6 +82,7 @@ class Health:
         self.recoveries = 0
         self.err_display = 0
         self.mem_min = None
+        self.sys_min = None
 
     def tick(self):
         """Call once per main-loop cycle: advances uptime and tracks the lowest free RAM"""
@@ -91,6 +92,11 @@ class Health:
         mem = _mem_free()
         if mem is not None and (self.mem_min is None or mem < self.mem_min):
             self.mem_min = mem
+
+    def sys_mem(self, free):
+        """Lowest free system memory (WiFi/sockets), measured by the main loop"""
+        if free is not None and (self.sys_min is None or free < self.sys_min):
+            self.sys_min = free
 
     def due(self):
         return self.uptime_s >= self._next_report
@@ -108,6 +114,7 @@ class Health:
             "err_wu": self.err_wu,
             "recoveries": self.recoveries,
             "err_display": self.err_display,
+            "sys_min_kb": _kb(self.sys_min),
             "ssid": _ssid(),
             "ota_route": _ota_route(),
         }

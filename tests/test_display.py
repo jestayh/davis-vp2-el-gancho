@@ -252,13 +252,14 @@ def test_forecast_icons_stay_in_their_area(screen, clock, kind, hhmm, dark):
 
 
 def test_every_forecast_rule_has_a_spanish_message():
-    assert len(dm._FC_RULES) == 197
+    assert len(dm._FC_RULES.split(",")) == dm._FC_COUNT == 197
     msgs = [dm.forecast_message(r) for r in range(197)]
     assert all(m and m.isascii() for m in msgs)                 # the OLED font has no accents
     assert msgs[0] == "Despejado y mas frio."
     assert msgs[193] == "Pronostico requiere 3 h de datos."
     assert msgs[93] == "Nubes en aumento y mas frio. Lluvia y viento posibles en 6 h."
-    assert dm.forecast_message(200) is None and dm.forecast_message(None) is None
+    assert msgs[196] == "Despejado y mas frio."
+    assert dm.forecast_message(197) is None and dm.forecast_message(None) is None
 
 
 @pytest.mark.parametrize("rule", [1, 178])

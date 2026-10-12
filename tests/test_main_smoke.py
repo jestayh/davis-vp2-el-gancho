@@ -64,6 +64,15 @@ def test_stale_py_next_to_mpy_is_removed(tmp_path):
     assert main.drop_stale_sources(str(tmp_path / "missing")) == []
 
 
+def test_reason_of_a_deliberate_restart_is_reported_once(tmp_path):
+    import main
+    marker = tmp_path / "reset_reason.txt"
+    assert main.take_reset_reason(str(marker)) is None
+    marker.write_text("Memoria agotada")
+    assert main.take_reset_reason(str(marker)) == "Memoria agotada"
+    assert not marker.exists() and main.take_reset_reason(str(marker)) is None
+
+
 def test_restart_after_an_ota_install_is_named_as_such(tmp_path):
     import json
     import main

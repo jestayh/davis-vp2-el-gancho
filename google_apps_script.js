@@ -45,19 +45,21 @@ var STATUS_COLUMNS = [
   ["Fallas WU", "err_wu"],
   ["Recuperaciones consola", "recoveries"],
   ["Errores pantalla", "err_display"],
+  ["Memoria sistema mín (KB)", "sys_min_kb"],   // WiFi y conexiones: bajo ~8 KB ya no puede conectarse
   ["Red WiFi", "ssid"],
   ["Ruta OTA", "ota_route"],
   ["Registros ayer", "records_yesterday"]     // calculado aquí: filas del día anterior (lo normal, 144)
 ];
 // Celdas del reporte que se marcan en rojo: [campo, función que decide si el valor es malo]
 var STATUS_LIMITS = [
-  ["reset_cause", function (v) { return v === "Watchdog"; }],
+  ["reset_cause", function (v) { return v === "Watchdog" || v === "Memoria agotada"; }],
   ["mem_min_kb", function (v) { return v !== "" && v < 30; }],
   ["rssi", function (v) { return v !== "" && v < -80; }],
   ["err_console", function (v) { return v > 50; }],
   ["err_sheets", function (v) { return v > 3; }],
   ["err_wu", function (v) { return v > 144; }],              // 5 % de ~2.880 envíos al día
   ["err_display", function (v) { return v > 0; }],
+  ["sys_min_kb", function (v) { return v !== "" && v < 12; }],
   ["records_yesterday", function (v) { return v !== "" && v < 140; }]
 ];
 var STATUS_BAD_COLOR = "#f4cccc";
