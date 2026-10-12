@@ -1,12 +1,12 @@
 {
-  "version": "1.0.7",
+  "version": "1.0.8",
   "date": "2026-10-11",
-  "description": "Recupera huecos 03-oct y 11-oct desde la consola; aviso sin datos",
+  "description": "Muestras de viento y recepcion ISS reales desde la consola",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "0d492e48346ad8586df1dbe585ef4f92a9b42a890ed8aaed70209f691a26a040"
+      "sha256": "93afaefd6480c55360499a115d8794bbf1c94b7d8e8fb7e8674d606bc5a27900"
     },
     {
       "remote": "src/display.mpy",
@@ -16,7 +16,7 @@
     {
       "remote": "src/davis_reader.mpy",
       "local": "src/davis_reader.mpy",
-      "sha256": "463245cc304d0d146a1a54dc9b0db132f139e78f59e0a2f7bd5e39f520452752"
+      "sha256": "82465c9a94b7165f05aed592f90c041cccfeba126b87b98d56509a619c074883"
     },
     {
       "remote": "src/data_logger.mpy",
@@ -26,12 +26,12 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "3fa7895f8bb8a3cf09d4f0e36a9971bf8eecdc0797a489bd3aad8c4abff7facc"
+      "sha256": "9518c6ed35633029176ae367e0cddac6c3b51a76450a2fedbd4161a1584352a6"
     },
     {
       "remote": "src/history_recovery.mpy",
       "local": "src/history_recovery.mpy",
-      "sha256": "6a0956da4f2dabe0a5af8491c385ff2c2c4e1f94f8bec7c96e77d40fbeb78982"
+      "sha256": "314f2b38e9913e590d5cbd14161f70e3d52a066c02db7bc63d98300d23391b7b"
     },
     {
       "remote": "src/ota_updater.mpy",
