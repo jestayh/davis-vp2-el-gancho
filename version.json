@@ -1,7 +1,7 @@
 {
-  "version": "1.0.11",
+  "version": "1.0.12",
   "date": "2026-10-11",
-  "description": "Pantalla 15 min tras actualizar; OTA parte por el Worker HTTP",
+  "description": "Pantalla: pronostico animado (sol, luna, nubes, lluvia, nieve)",
   "files": [
     {
       "remote": "app.mpy",
@@ -11,7 +11,7 @@
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "3edbc3037479819e787ffd1e0648c9a6b362ec34f7d2b4ce1bb65e2fb677472a"
+      "sha256": "51fd766c6de161e21671294497ec78bb7ab176a31e3ccfa211516f8a2a955954"
     },
     {
       "remote": "src/davis_reader.mpy",
