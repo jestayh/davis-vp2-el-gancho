@@ -1,17 +1,17 @@
 {
-  "version": "1.0.20",
+  "version": "1.0.21",
   "date": "2026-10-12",
-  "description": "Una sola conexion a la consola por lectura (maximas y minimas incluidas)",
+  "description": "Sin memoria para conexiones: subida por partes y reinicio de seguridad",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "52ada0efced671a2cc5cd61338ae2eb5dcc2a467381376c61a3e9b2cca3210a3"
+      "sha256": "6e094210aeff383a9b144e61b4460331403d0e2365c4ec723ceef6e9c22958b5"
     },
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "0efc2d26a90b8a92a013b3e03f9bd7fcdd8df5c80d6d5fddca1d251633151add"
+      "sha256": "3cf6e4f2cc707b9a086e92b8653c03a9a0d81d1f331454aedacec248a99d102b"
     },
     {
       "remote": "src/davis_reader.mpy",
@@ -26,7 +26,7 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "37a92ba654fe88980b7815a89295b2cd2fa59eae63495cc1bc7f92e910b2792e"
+      "sha256": "babaa33a9a443f6c82e9d3851229848c9c5a81c854ce7e0916ea1a1642b27c96"
     },
     {
       "remote": "src/history_recovery.mpy",
@@ -46,7 +46,7 @@
     {
       "remote": "src/health.mpy",
       "local": "src/health.mpy",
-      "sha256": "58bc62f89cbea8580a8886cda1a711b2735f3d2e0e582ec2b7975d83b8fd33f4"
+      "sha256": "c226b706ed52b2ae0f2f5102c356750f0085dedaa3ee10730f7dbfa089e9a472"
     },
     {
       "remote": "src/weather_underground.mpy",
