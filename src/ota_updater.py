@@ -47,6 +47,7 @@ LOCAL_VERSION_FILE = "data/version.json"
 PENDING_FILE = "data/ota_pending.json"   # version under trial until the app confirms a good boot
 BAD_VERSION_FILE = "data/ota_bad.json"   # version rolled back by the launcher; never reinstalled
 BACKUP_DIR = "backup"
+ROUTE_FILE = "data/ota_route.txt"         # label of the last route that delivered the manifest
 
 
 def get_local_version():
@@ -196,14 +197,36 @@ def _sha256_file(path):
 
 
 def _build_sources(repo_user, repo_name, branch, proxy_host):
-    """Ordered list of (label, host, path_prefix, use_ssl) download routes"""
-    sources = [("GitHub", "raw.githubusercontent.com", "/" + repo_user + "/" + repo_name + "/" + branch, True)]
-    if proxy_host:
-        # Plain HTTP before HTTPS: on the station's ESP32 the proxy TLS handshake hangs ~2 min and then
-        # fails for lack of RAM, while HTTP works (files are still verified against their SHA-256)
-        sources.append(("Proxy HTTP", proxy_host, "", False))
-        sources.append(("Proxy HTTPS", proxy_host, "", True))
-    return sources
+    """
+    Ordered list of (label, host, path_prefix, use_ssl) download routes. On the station's ESP32 the
+    TLS routes fail for lack of RAM (GitHub after a long wait, the proxy HTTPS after ~2 min), while
+    the proxy over plain HTTP works, so it goes first (files are still verified against their SHA-256).
+    """
+    github = ("GitHub", "raw.githubusercontent.com", "/" + repo_user + "/" + repo_name + "/" + branch, True)
+    if not proxy_host:
+        return [github]
+    return [("Proxy HTTP", proxy_host, "", False), github, ("Proxy HTTPS", proxy_host, "", True)]
+
+
+def _first_route(sources):
+    """Index of the route that worked last time (saved in ROUTE_FILE), else 0"""
+    try:
+        with open(ROUTE_FILE, "r") as f:
+            label = f.read().strip()
+        for i, src in enumerate(sources):
+            if src[0] == label:
+                return i
+    except Exception:
+        pass
+    return 0
+
+
+def _save_route(label):
+    try:
+        with open(ROUTE_FILE, "w") as f:
+            f.write(label)
+    except Exception:
+        pass
 
 
 def _fetch(sources, start_idx, rel_path, target_path, expected_sha=None):
@@ -250,11 +273,12 @@ def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branc
     print("[OTA] Comprobando actualizaciones en GitHub (version local: v{})...".format(local_ver))
 
     tmp_manifest = "data/version_remote.json"
-    ok, src_idx, err = _fetch(sources, 0, "version.json", tmp_manifest)
+    ok, src_idx, err = _fetch(sources, _first_route(sources), "version.json", tmp_manifest)
     if not ok:
         print("[OTA] No se pudo obtener version.json por ninguna ruta ({})".format(err))
         return False
     print("[OTA] Manifiesto obtenido via {}".format(sources[src_idx][0]))
+    _save_route(sources[src_idx][0])
 
     manifest = None
     try:
@@ -272,6 +296,11 @@ def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branc
     if remote_ver == get_bad_version():
         print("[OTA] v{} fue revertida por fallar al arrancar; se omite hasta que se publique otra version.".format(remote_ver))
         return False
+
+    # Screen on (even at night) so the update can be watched; the boot that follows keeps it on
+    wake = getattr(display, "wake", None)
+    if wake:
+        wake(15 * 60)
 
     print("\n" + "=" * 60)
     print("  [OTA] NUEVA VERSION DETECTADA: v{} -> v{}".format(local_ver, remote_ver))

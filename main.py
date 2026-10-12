@@ -26,7 +26,7 @@ from src.davis_reader import (
 )
 from src.weather_underground import upload
 from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailyStats
-from src.display import WeatherDisplay
+from src.display import WeatherDisplay, WAKE_SECONDS
 from src.google_sheets import upload_to_google_sheets
 import src.google_sheets as gsheets
 import config as _config
@@ -303,6 +303,9 @@ def main(max_cycles=None):
     print("  LED de Estado (GPIO {}): {}".format(STATUS_LED_PIN, STATUS_LED_MODE if ENABLE_STATUS_LED else "Deshabilitado"))
     print("  Base de Datos: {}".format(CSV_FILEPATH))
     print("=" * 70 + "\n")
+
+    # Screen on for a while after every boot (also after an OTA install), even at night
+    display.wake(WAKE_SECONDS)
 
     # Connect WiFi if running on ESP32 (splash shown only during boot)
     connect_wifi_if_needed(show_display=True)

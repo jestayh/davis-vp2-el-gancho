@@ -18,6 +18,15 @@ def _sleep_ms(ms):
         time.sleep(ms / 1000.0)
 
 
+def _ticks():
+    """Monotonic milliseconds: unlike time.time(), it does not jump when NTP sets the clock at boot"""
+    return time.ticks_ms() if IS_ESP32 else int(time.time() * 1000)
+
+
+def _since_s(t0):
+    return (time.ticks_diff(_ticks(), t0) if IS_ESP32 else _ticks() - t0) / 1000.0
+
+
 def _format_datetime_short(ts_str):
     """Convert 'YYYY-MM-DD HH:MM:SS' to 'DD/MM HH:MM:SS' (14 chars)"""
     if not ts_str or len(ts_str) < 19:
@@ -77,6 +86,8 @@ NIGHT_START_HOUR = 23
 NIGHT_END_HOUR = 7
 CONTRAST_DAY = 0x60
 CONTRAST_NIGHT = 0x01
+# After a boot (an OTA install ends in one) or when an update is found, the screen stays on this long
+WAKE_SECONDS = 15 * 60
 # The console is polled every 30 s: with no new reading for this long the data on screen is stale
 STALE_DATA_SECONDS = 120
 
@@ -120,7 +131,9 @@ class WeatherDisplay:
         self.ip_addr = "192.168.1.6"
         self.wu_station_id = "ISANTA2468"
         self._last_data_ts = None
-        self._last_data_change = time.time()
+        self._last_data_change = _ticks()
+        self._awake_from = 0
+        self._awake_for = 0
         self._screen_off = False
         self._contrast = None
         self.fw_version = None
@@ -318,6 +331,19 @@ class WeatherDisplay:
         if right:
             self.oled.text(right, 126 - 8 * len(right), 4, color)
 
+    def wake(self, seconds):
+        """Keep the screen on (at night too) for the next seconds, e.g. after a boot or an update"""
+        self._awake_from = _ticks()
+        self._awake_for = seconds
+        if self.has_oled and self.oled:
+            try:
+                self._set_power(True, self._contrast or CONTRAST_DAY)
+            except Exception:
+                pass
+
+    def is_awake(self):
+        return self._awake_for > 0 and _since_s(self._awake_from) < self._awake_for
+
     def _set_power(self, on, contrast):
         if not on:
             if not self._screen_off:
@@ -334,16 +360,15 @@ class WeatherDisplay:
     def _status_header(self, card_title, data, now_str):
         """(left, right, alert, night) for the card header, from data freshness, uploads and clock"""
         ts = data.get("timestamp")
-        now = time.time()
         if ts != self._last_data_ts:
             self._last_data_ts = ts
-            self._last_data_change = now
+            self._last_data_change = _ticks()
 
         clock = now_str if now_str and now_str[:4] >= "2025" else None
-        night = clock is not None and _is_night(int(clock[11:13]))
+        night = clock is not None and _is_night(int(clock[11:13])) and not self.is_awake()
         time_hm = clock[11:16] if clock else ""
 
-        stale_for = now - self._last_data_change
+        stale_for = _since_s(self._last_data_change)
         if stale_for >= STALE_DATA_SECONDS:
             return "SIN DATOS", _format_age(stale_for), True, night
         if self.gdrive_status == "ERR":
