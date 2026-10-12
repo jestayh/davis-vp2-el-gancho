@@ -180,3 +180,30 @@ El sistema incluye soporte de actualización remota vía GitHub Releases:
 python ota_publish.py "Descripción de la actualización"
 ```
 Al reiniciar o conectarse a WiFi, el ESP32 verifica automáticamente si existe una versión superior en GitHub y actualiza su firmware de forma autónoma.
+
+---
+
+## Google Sheets: camino de los datos
+
+```
+ESP32 ──HTTP──> Worker Cloudflare "davis-sheets-proxy" ──HTTPS──> Apps Script (doPost) ──> Planilla
+```
+
+- El código del Worker está en [cloudflare/sheets_worker.js](cloudflare/sheets_worker.js); el del Apps Script, en [google_apps_script.js](google_apps_script.js).
+  El enlace del Apps Script (`GOOGLE_URL`) se pega **solo en Cloudflare**, nunca en el repositorio, porque es público.
+- El proyecto de Apps Script está vinculado a la planilla y se llama **"El Gancho – Webhook (activo)"**.
+  Debe tener **una sola** implementación activa de *Aplicación web*, y el Worker tiene que apuntar a ella.
+  En octubre de 2026 había dos: el Worker enviaba a una que estaba fija en una versión antigua, y por eso
+  los cambios publicados no se aplicaban.
+
+### Publicar un cambio del Apps Script
+
+1. Pegar el código en el editor y guardar (Ctrl+S).
+2. **Implementar → Administrar implementaciones →** lápiz **→ Versión: "Nueva versión" → Implementar**.
+   Así el enlace no cambia. Con *Nueva implementación* se crea un enlace distinto y habría que cambiarlo en el Worker.
+3. Comprobar en **Ejecuciones** que el siguiente `doPost` usa la versión nueva.
+   **Si nada cambia**, revisar primero a qué enlace apunta `GOOGLE_URL` en el Worker.
+
+Las funciones que se ejecutan a mano desde el editor (`repararHoja`, `importarConsola`, `activarAvisos`)
+usan el código guardado y no necesitan publicarse. Para los avisos por correo, en **Activadores** debe
+existir un solo `revisarEstacion`.
