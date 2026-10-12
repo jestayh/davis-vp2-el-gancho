@@ -23,6 +23,7 @@ Diseñado en **Python puro sin dependencias externas**, lo que permite ejecutarl
 ## Estación en Vivo
 
 - **Weather Underground:** [`IPUTAE17`](https://www.wunderground.com/dashboard/pws/IPUTAE17) *(Putaendo, Valparaíso, Chile — Lat: -32.63°, Lon: -70.72°)*.
+- **Windy:** estación [`NPLL5k7`](https://stations.windy.com/) — la publica el Apps Script con cada registro de 10 minutos.
 - **Transmisión:** En vivo cada 30 segundos (RapidFire).
 - **Sincronización Cloud:** Cada 10 minutos a Google Sheets (esquema WeatherLink PC con 41 columnas).
 
@@ -223,3 +224,11 @@ ESP32 ──HTTP──> Worker Cloudflare "davis-sheets-proxy" ──HTTPS──
 Las funciones que se ejecutan a mano desde el editor (`repararHoja`, `importarConsola`, `activarAvisos`)
 usan el código guardado y no necesitan publicarse. Para los avisos por correo, en **Activadores** debe
 existir un solo `revisarEstacion`.
+
+### Windy
+
+El Apps Script reenvía cada registro reciente (de menos de 30 min; los recuperados de la consola no) a la
+API v2 de Windy, con la estación `WINDY_STATION_ID`. La contraseña de la estación (Windy → *My stations*)
+va en **Configuración del proyecto → Propiedades del script → `WINDY_PASSWORD`**, nunca en el código.
+`estadoWindy()` muestra si está configurada y cómo respondió Windy el último envío. Si Windy falla, la
+fila igual se guarda en la planilla.

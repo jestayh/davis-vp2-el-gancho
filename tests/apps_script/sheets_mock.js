@@ -96,6 +96,15 @@ function loadScript(scriptPath) {
         return { timeBased: () => ({ everyMinutes: (m) => ({ create: () => self.triggers.push({ fn, m, getHandlerFunction: () => fn }) }) }) };
       },
     },
+    UrlFetchApp: {
+      requests: [], code: 200, fail: false,
+      fetch(url, opts) {
+        if (this.fail) throw new Error("DNS error");
+        this.requests.push({ url, opts });
+        const code = this.code;
+        return { getResponseCode: () => code, getContentText: () => (code === 200 ? "OK" : "Bad request") };
+      },
+    },
     Logger: { log: (m) => logs.push(String(m)) },
     DriveApp: {},
     console,

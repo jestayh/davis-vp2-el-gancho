@@ -4,7 +4,7 @@ const path = require("path");
 const { loadScript, Sheet } = require("./sheets_mock");
 
 const SCRIPT = path.join(__dirname, "..", "..", "google_apps_script.js");
-const { ctx, ss, logs, mails, lock } = loadScript(SCRIPT);
+const { ctx, ss, logs, mails, lock, props } = loadScript(SCRIPT);
 
 let failures = 0;
 const check = (cond, msg) => {
@@ -251,6 +251,41 @@ ctx.FAKE_NOW = "2026-10-13 02:05:00";
 ctx.revisarEstacion();
 check(mails.slice(count).some((m) => m.subject.includes("helada (-2 °C")), "otra noche: nuevo aviso de helada");
 check(!mails.slice(count).some((m) => m.subject.includes("batería")), "baterías: un aviso por semana");
+
+// ---------- Windy ----------
+const windy = ctx.UrlFetchApp;
+check(windy.requests.length === 0, "sin WINDY_PASSWORD no se envía nada a Windy");
+props.WINDY_PASSWORD = "clave-de-prueba";
+ctx.FAKE_NOW = "2026-10-13 02:15:00";
+wx("2026-10-13 02:10:00", { rain_interval_mm: 0.3 });
+ctx.FAKE_NOW = "2026-10-13 02:25:00";
+check(wx("2026-10-13 02:20:00", { temp_out_c: -1.5, dewpoint_c: -3.04, humidity_out: 88, wind_speed_kmh: 20,
+  wind_speed_10min_avg_kmh: 18, windgustkmh_10m: 36, wind_direction_deg: 360, pressure_hpa: 1013.4,
+  rain_interval_mm: 0.5, uv_index: 0, solar_radiation_wm2: 0 }) === "SUCCESS", "fila guardada con Windy activo");
+check(windy.requests.length === 2, "un envío a Windy por registro reciente");
+const w = windy.requests[1];
+const q = new URLSearchParams(w.url.split("?")[1]);
+check(w.url.startsWith("https://stations.windy.com/api/v2/observation/update?") && q.get("id") === "NPLL5k7",
+      "endpoint v2 con el ID de la estación");
+check(w.opts.headers.Authorization === "Bearer clave-de-prueba" && !w.url.includes("clave-de-prueba"),
+      "contraseña en la cabecera, no en la URL");
+check(q.get("temp") === "-1.5" && q.get("dewpoint") === "-3" && q.get("humidity") === "88", "temperatura, rocío y humedad");
+check(q.get("wind") === "5" && q.get("gust") === "10" && q.get("winddir") === "0", "viento medio 10 min y ráfaga en m/s");
+check(q.get("pressure") === "101340", "presión en Pa");
+check(q.get("precip") === "0.8", "lluvia de la última hora (0.3 + 0.5 mm) -> " + q.get("precip"));
+check(Math.abs(Number(q.get("ts")) - Date.now() / 1000 + 300) < 5, "hora de la observación (hace 5 min)");
+check(props.WINDY_ULTIMO === "2026-10-13 02:20:00 -> HTTP 200", "respuesta registrada");
+wx("2026-10-13 01:30:00", {});
+post({ destino: "consola", timestamp: "CONSOLA 2026-10-13 02:30:00", temp_out_c: 3 });
+check(windy.requests.length === 2, "no se envían a Windy registros recuperados ni de la pestaña Consola");
+windy.code = 400;
+check(wx("2026-10-13 02:30:00", {}) === "SUCCESS" && props.WINDY_ULTIMO.includes("HTTP 400: Bad request"),
+      "si Windy rechaza, la fila igual se guarda");
+windy.fail = true;
+check(wx("2026-10-13 02:30:00", {}) === "SUCCESS" && props.WINDY_ULTIMO.includes("DNS error"),
+      "si Windy no responde, la fila igual se guarda");
+ctx.estadoWindy();
+check(logs.some((l) => l.includes("WINDY_PASSWORD): configurada")), "estadoWindy informa la configuración");
 
 console.log(failures ? "\n" + failures + " FALLAS" : "\nTODO OK");
 process.exit(failures ? 1 : 0);

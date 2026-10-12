@@ -11,6 +11,8 @@
  *    recuperados del archivo de la consola no traen.
  * 5. Auto-archivado anual automático en Google Drive el 1 de enero.
  * 6. Pestaña "Estado": un reporte diario de salud del ESP32 (versión, memoria, WiFi, fallas).
+ * 7. Publica cada registro nuevo en Windy (estación WINDY_STATION_ID) si la propiedad del
+ *    script WINDY_PASSWORD tiene la contraseña de la estación.
  *
  * Funciones para ejecutar a mano desde el editor:
  * - activarAvisos(): correo si la estación pasa 60 min sin enviar datos (y cuando vuelven), y
@@ -19,6 +21,7 @@
  * - importarConsola(): rellena el hueco del 08-oct-2026 con la pestaña "Consola".
  * - repararHoja(): borra filas con fecha inválida y duplicados, y vacía Muestras/Tx erróneos.
  * - ordenarPorFecha(): reordena toda la hoja.
+ * - estadoWindy(): muestra si el envío a Windy está configurado y la respuesta del último envío.
  */
 
 var MIN_VALID_YEAR = 2025;
@@ -71,6 +74,7 @@ function doPost(e) {
     var headers = getHeaders_(sheet);
     var row = buildRow_(headers, data, key);
     upsertRow_(sheet, headers, row, key, !toConsole);
+    if (!toConsole) enviarWindy_(sheet, headers, key, data);
 
     return text_("SUCCESS");
   } catch (err) {
@@ -533,6 +537,97 @@ function fillDerived_(sheet, headers, row, key, keys, pos) {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// Windy (stations.windy.com, API v2)
+// ---------------------------------------------------------------------------------------
+
+var WINDY_STATION_ID = "NPLL5k7";
+var WINDY_URL = "https://stations.windy.com/api/v2/observation/update";
+// Solo registros recientes: los recuperados de la consola llegan con horas de atraso
+var WINDY_MAX_AGE_MINUTES = 30;
+
+/**
+ * Publica el registro en Windy. La contraseña de la estación va en la propiedad del script
+ * WINDY_PASSWORD (nunca en el código: el repositorio es público) y viaja en la cabecera
+ * Authorization. Nunca lanza errores: una falla de Windy no debe impedir guardar la fila.
+ * La respuesta queda en la propiedad WINDY_ULTIMO (ver estadoWindy()).
+ */
+function enviarWindy_(sheet, headers, key, data) {
+  var props = PropertiesService.getScriptProperties();
+  try {
+    var password = props.getProperty("WINDY_PASSWORD");
+    if (!password) return;
+    var tz = sheet.getParent().getSpreadsheetTimeZone();
+    var nowKey = Utilities.formatDate(new Date(), tz, KEY_FORMAT);
+    var age = keyMinutes_(nowKey) - keyMinutes_(key);
+    if (age > WINDY_MAX_AGE_MINUTES || age < -10) return;
+
+    var params = windyParams_(data, rainLastHour_(sheet, headers, tz, key));
+    params.id = WINDY_STATION_ID;
+    params.ts = Math.round(Date.now() / 1000) - age * 60;
+    var query = Object.keys(params).map(function (k) {
+      return k + "=" + encodeURIComponent(params[k]);
+    }).join("&");
+
+    var resp = UrlFetchApp.fetch(WINDY_URL + "?" + query, {
+      method: "get",
+      headers: { Authorization: "Bearer " + password },
+      muteHttpExceptions: true
+    });
+    var code = resp.getResponseCode();
+    props.setProperty("WINDY_ULTIMO", key + " -> HTTP " + code +
+      (code === 200 ? "" : ": " + String(resp.getContentText()).slice(0, 150)));
+  } catch (err) {
+    props.setProperty("WINDY_ULTIMO", key + " -> " + String(err).slice(0, 150));
+  }
+}
+
+/** Parámetros de Windy en sus unidades: °C, m/s, Pa, mm en la última hora, W/m² */
+function windyParams_(data, precip) {
+  var p = {};
+  var put = function (name, value, factor, decimals) {
+    if (value === undefined || value === null || value === "" || isNaN(Number(value))) return;
+    var f = Math.pow(10, decimals);
+    p[name] = Math.round(Number(value) * factor * f) / f;
+  };
+  put("temp", data.temp_out_c, 1, 1);
+  put("dewpoint", data.dewpoint_c, 1, 1);
+  put("humidity", data.humidity_out, 1, 0);
+  put("wind", v_(data.wind_speed_10min_avg_kmh, data.wind_speed_kmh), 1 / 3.6, 1);
+  put("gust", data.windgustkmh_10m, 1 / 3.6, 1);
+  put("winddir", data.wind_direction_deg, 1, 0);
+  put("pressure", data.pressure_hpa, 100, 0);
+  put("precip", precip, 1, 1);
+  put("uv", data.uv_index, 1, 1);
+  put("solarradiation", data.solar_radiation_wm2, 1, 0);
+  if (p.winddir !== undefined) p.winddir = p.winddir % 360;
+  return p;
+}
+
+/** Lluvia de la hora que termina en key (suma de "Lluvia Int"); "" si no hay datos */
+function rainLastHour_(sheet, headers, tz, key) {
+  var cInt = colIndex_(headers, ["lluvia int"]);
+  var n = Math.min(12, sheet.getLastRow() - 1);
+  if (cInt < 0 || n < 1) return "";
+  var vals = sheet.getRange(sheet.getLastRow() - n + 1, 1, n, cInt + 1).getValues();
+  var end = keyMinutes_(key), clicks = 0, found = false;
+  for (var i = 0; i < vals.length; i++) {
+    var k = keyOf_(vals[i][0], tz);
+    if (!k || vals[i][cInt] === "") continue;
+    var age = end - keyMinutes_(k);
+    if (age >= 0 && age < 60) { clicks += rainClicks_(vals[i][cInt]); found = true; }
+  }
+  return found ? clicksToMm_(clicks) : "";
+}
+
+/** Para ejecutar a mano: muestra si Windy está configurado y cómo respondió el último envío */
+function estadoWindy() {
+  var props = PropertiesService.getScriptProperties();
+  Logger.log("Estación Windy: " + WINDY_STATION_ID);
+  Logger.log("Contraseña (WINDY_PASSWORD): " + (props.getProperty("WINDY_PASSWORD") ? "configurada" : "FALTA"));
+  Logger.log("Último envío: " + (props.getProperty("WINDY_ULTIMO") || "ninguno todavía"));
 }
 
 // ---------------------------------------------------------------------------------------
