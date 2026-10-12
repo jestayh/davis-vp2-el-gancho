@@ -1,12 +1,12 @@
 {
-  "version": "1.0.15",
+  "version": "1.0.16",
   "date": "2026-10-11",
-  "description": "Reporte diario de salud; pronostico mas lento; tarjeta Sol y Luna",
+  "description": "No perder datos sin aviso; borra .py antiguos que ocultaban actualizaciones",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "907fa3a060fa601ca9814aa99fb4ec76bfd20dbe5e4f8c76ad2de66fb4a109c4"
+      "sha256": "44cf64ae615ac38d0cce6282cc9dc3a63c055148039337e479389c592230626c"
     },
     {
       "remote": "src/display.mpy",
@@ -26,7 +26,7 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "c442b7bfb065bf662f16cc5721b859e0e251cdf7a7d979259779ccc2ed72fdd8"
+      "sha256": "01f0d24429349c695f98acb08a4720f8bdec1e690009593d11b9254cc7fa90f9"
     },
     {
       "remote": "src/history_recovery.mpy",
@@ -47,6 +47,16 @@
       "remote": "src/health.mpy",
       "local": "src/health.mpy",
       "sha256": "4c24b3aa5e6fed0aba831f5c657b50448e184e7845ac94d18f7c87ced8c9414f"
+    },
+    {
+      "remote": "src/weather_underground.mpy",
+      "local": "src/weather_underground.mpy",
+      "sha256": "047c1c4978e5adb2bddafff7fa142a166f593ff2b3cf4f621c2a51d30b94cedc"
+    },
+    {
+      "remote": "src/ssd1306.mpy",
+      "local": "src/ssd1306.mpy",
+      "sha256": "5a0b84c83251791d7063092b4243709a89c92a37c0f0106b4eb06de75f634ccc"
     }
   ]
 }
