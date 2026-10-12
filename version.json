@@ -1,7 +1,7 @@
 {
-  "version": "1.0.12",
+  "version": "1.0.13",
   "date": "2026-10-11",
-  "description": "Pantalla: pronostico animado (sol, luna, nubes, lluvia, nieve)",
+  "description": "Pantalla: mensaje del pronostico Davis desplazandose en espanol",
   "files": [
     {
       "remote": "app.mpy",
@@ -11,7 +11,7 @@
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "51fd766c6de161e21671294497ec78bb7ab176a31e3ccfa211516f8a2a955954"
+      "sha256": "caf0a356cd5164659bbeb326dc62a850f6085feaab18176cc16065b21467a406"
     },
     {
       "remote": "src/davis_reader.mpy",
