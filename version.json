@@ -1,7 +1,7 @@
 {
-  "version": "1.0.16",
-  "date": "2026-10-11",
-  "description": "No perder datos sin aviso; borra .py antiguos que ocultaban actualizaciones",
+  "version": "1.0.17",
+  "date": "2026-10-12",
+  "description": "Pantalla: tarjeta de lluvia siempre visible; errores de pantalla a la vista",
   "files": [
     {
       "remote": "app.mpy",
@@ -11,7 +11,7 @@
     {
       "remote": "src/display.mpy",
       "local": "src/display.mpy",
-      "sha256": "abbe53a99eee1e9eebb6af1b00ff984b990ec59137bfcbae4b1cefe427726c9d"
+      "sha256": "e90c3657892ff7906a51402029bee3f9d6c3ec7a7c21bfc84fa36b2098caf55d"
     },
     {
       "remote": "src/davis_reader.mpy",
