@@ -1,8 +1,9 @@
 """
 OTA (Over-The-Air) Firmware Updater for Davis VP2 Weather Station
-Downloads pre-compiled bytecode (.mpy) from GitHub, trying several routes in order:
-  1. GitHub directly over HTTPS
-  2. Cloudflare Worker proxy over plain HTTP
+Downloads pre-compiled bytecode (.mpy) from GitHub, trying several routes in order (starting
+with the one that worked last time):
+  1. Cloudflare Worker proxy over plain HTTP
+  2. GitHub directly over HTTPS
   3. Cloudflare Worker proxy over HTTPS
 Every file is verified against the SHA-256 listed in version.json before installing.
 Safe atomic downloads with automatic rollback on error.
@@ -10,6 +11,11 @@ Safe atomic downloads with automatic rollback on error.
 
 import sys
 import time
+
+try:
+    from src import watchdog
+except ImportError:      # tools/ota_rescue.py may run this module without the rest of the app
+    watchdog = None
 
 try:
     import usocket as socket
@@ -168,6 +174,8 @@ def _download_file(host, path, target_path, use_ssl=True, port=None):
             if initial_body:
                 f.write(initial_body)
             while True:
+                if watchdog:
+                    watchdog.feed()
                 chunk = rd(512)
                 if not chunk:
                     break
@@ -238,6 +246,8 @@ def _fetch(sources, start_idx, rel_path, target_path, expected_sha=None):
     n = len(sources)
     for k in range(n):
         i = (start_idx + k) % n
+        if watchdog:
+            watchdog.feed()
         label, host, prefix, use_ssl = sources[i]
         ok, status = _download_file(host, prefix + "/" + rel_path, target_path, use_ssl)
         if ok and expected_sha:

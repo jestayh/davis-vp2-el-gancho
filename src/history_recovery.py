@@ -40,6 +40,7 @@ from src.data_logger import (
     log_reading_csv, get_last_csv_timestamp, update_last_sync_timestamp, file_exists
 )
 from src.google_sheets import upload_to_google_sheets
+from src import watchdog
 
 IS_ESP32 = sys.platform == "esp32"
 
@@ -122,6 +123,7 @@ def dmpaft_fetch_raw(host, port, since_tuple, until_tuple=None, max_records=RECO
 
         done = False
         for page_idx in range(npages):
+            watchdog.feed()
             sock.sendall(b"\x06")
 
             page_data = b""
@@ -373,6 +375,7 @@ def recover_gap(until_tuple, disp=None):
     sent = 0
     while raw:
         rec_tuple, rec_bytes = raw.pop(0)
+        watchdog.feed()
         rec = parse_archive_record(rec_bytes, rec_tuple)
         del rec_bytes
         log_reading_csv(CSV_FILEPATH, rec, uploaded=False)
@@ -454,6 +457,7 @@ def _run_backfill_job(job, disp):
     sent = 0
     while raw:
         rec_tuple, rec_bytes = raw.pop(0)
+        watchdog.feed()
         rec = parse_archive_record(rec_bytes, rec_tuple)
         del rec_bytes
         rec["timestamp"] = "CONSOLA " + rec["timestamp"]

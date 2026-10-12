@@ -29,6 +29,7 @@ from src.data_logger import log_reading_csv, update_last_sync_timestamp, DailySt
 from src.display import WeatherDisplay, WAKE_SECONDS
 from src.google_sheets import upload_to_google_sheets
 import src.google_sheets as gsheets
+from src import watchdog
 import config as _config
 
 # Optional settings (defaults apply when an older config.py on the device lacks them)
@@ -289,6 +290,8 @@ def run_console_backfill():
 
 
 def main(max_cycles=None):
+    # From here on, a hang of more than watchdog.TIMEOUT_SECONDS resets the board
+    watchdog.start()
     if IS_ESP32:
         time.sleep(2)
     print("\n" + "=" * 70)
@@ -310,9 +313,11 @@ def main(max_cycles=None):
     # Connect WiFi if running on ESP32 (splash shown only during boot)
     connect_wifi_if_needed(show_display=True)
     display.set_station_id(WU_STATION_ID)
+    watchdog.feed()
 
     # Check for Over-The-Air (OTA) firmware updates from GitHub (also repeated daily in the main loop)
     run_ota_check()
+    watchdog.feed()
     next_ota_check = time.time() + OTA_CHECK_INTERVAL_SECONDS
     installed_fw = read_installed_fw_version()
     next_hint_ota_check = 0
@@ -336,6 +341,7 @@ def main(max_cycles=None):
 
     data = None
     for attempt in range(5):
+        watchdog.feed()
         data = query_station(DAVIS_HOST, DAVIS_PORT, timeout=SOCKET_TIMEOUT_SECONDS)
         if data:
             break
@@ -369,6 +375,7 @@ def main(max_cycles=None):
     try:
         while max_cycles is None or cycle < max_cycles:
             cycle += 1
+            watchdog.feed()
 
             # NTP: retried every few minutes while the clock is invalid, refreshed daily afterwards
             if IS_ESP32:

@@ -23,6 +23,7 @@ FILES_TO_COMPILE = [
     ("src/google_sheets.py", "src/google_sheets.mpy"),
     ("src/history_recovery.py", "src/history_recovery.mpy"),
     ("src/ota_updater.py", "src/ota_updater.mpy"),
+    ("src/watchdog.py", "src/watchdog.mpy"),
 ]
 
 
