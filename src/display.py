@@ -80,6 +80,11 @@ CONTRAST_NIGHT = 0x01
 # The console is polled every 30 s: with no new reading for this long the data on screen is stale
 STALE_DATA_SECONDS = 120
 
+# Cards shown every CARD_ROTATION_SECONDS; the big temperature ("ahora") comes back between the others
+_ROTATION = ("ahora", "exterior", "ahora", "viento", "ahora", "lluvia",
+             "ahora", "sol", "ahora", "sistema", "ahora", "subidas")
+_RESET_SHORT = {"Reset hardware": "Reset HW", "Reinicio software": "Reset SW"}
+
 
 def _is_night(hour):
     if NIGHT_START_HOUR > NIGHT_END_HOUR:
@@ -118,6 +123,9 @@ class WeatherDisplay:
         self._last_data_change = time.time()
         self._screen_off = False
         self._contrast = None
+        self.fw_version = None
+        self.reset_cause = None
+        self.iss_recept = None
 
         if not IS_ESP32:
             return
@@ -145,7 +153,7 @@ class WeatherDisplay:
                 self.has_oled = True
 
             if self.has_oled:
-                self.show_message("DAVIS VP2", "Pantalla Lista", "Iniciando...")
+                self.show_message("DAVIS VP2", "\"El Gancho\"", "by J. Estay", "Iniciando...")
         except Exception:
             self.has_oled = False
 
@@ -224,7 +232,7 @@ class WeatherDisplay:
 
             # Blue body (48px)
             self.oled.text(_center("GUARDADO EXITOSO"), 0, 22, 1)
-            self.oled.text(_center("[OK] 41 COLUMNAS"), 0, 36, 1)
+            self.oled.text(_center("[OK] Registro"), 0, 36, 1)
             if t_str:
                 self.oled.text(_center("Hora: " + t_str), 0, 50, 1)
             else:
@@ -351,10 +359,69 @@ class WeatherDisplay:
         else:
             self.show_message("CONECTANDO WIFI", ssid[:16], "Buscando red...")
 
-    def _get_card_content(self, card_idx, data):
-        """Return (card_title, [line1, line2, line3, line4]) for specified card (0 to 4)"""
-        if card_idx == 0:
-            # Card 0: AMBIENTE EXTERIOR
+    def set_system_info(self, fw=None, reset=None):
+        """Firmware version and why the ESP32 last started, for the SISTEMA card"""
+        self.fw_version = fw
+        self.reset_cause = reset
+
+    def set_iss_recept(self, pct):
+        """ISS reception (%) of the last logged interval, from the console's wind sample count"""
+        self.iss_recept = pct
+
+    def _next_card(self, data):
+        """Next card id in _ROTATION; the rain card is skipped while it is not raining, and the
+        big temperature is never shown twice in a row"""
+        for _ in range(len(_ROTATION)):
+            card = _ROTATION[self.card_index]
+            self.card_index = (self.card_index + 1) % len(_ROTATION)
+            if card == "lluvia" and not (data.get("rain_rate_mm_per_hr") or data.get("rain_day_mm")):
+                continue
+            if card == "ahora" and self.last_card_title == "AHORA":
+                continue
+            return card
+        return "ahora"
+
+    def _draw_big_text(self, s, x, y, scale):
+        """8x8 font scaled up (the SSD1306 framebuffer only has the small font)"""
+        import framebuf
+        w = 8 * len(s)
+        fb = framebuf.FrameBuffer(bytearray(w), w, 8, framebuf.MONO_HLSB)
+        fb.text(s, 0, 0, 1)
+        for yy in range(8):
+            for xx in range(w):
+                if fb.pixel(xx, yy):
+                    self.oled.fill_rect(x + xx * scale, y + yy * scale, scale, scale, 1)
+
+    def _draw_now_card(self, data):
+        """Big outdoor temperature, with humidity and wind below"""
+        t_out = data.get("temp_out_c")
+        num = "{:.1f}".format(t_out) if t_out is not None else "--.-"
+        scale = 3 if 8 * 3 * len(num) + 13 <= 128 else 2
+        width = 8 * scale * len(num) + 13          # number + gap, degree sign and "C"
+        x = (128 - width) // 2
+        try:
+            self._draw_big_text(num, x, 20, scale)
+        except ImportError:
+            # PC simulation without framebuf: plain text
+            self.oled.text(num, x, 28, 1)
+        x_unit = x + 8 * scale * len(num) + 2
+        self.oled.rect(x_unit, 20, 3, 3, 1)
+        self.oled.text("C", x_unit + 3, 22, 1)
+
+        h_out = data.get("humidity_out")
+        w_spd = data.get("wind_speed_kmh")
+        w_dir = data.get("wind_direction_deg")
+        bottom = "{}%".format(h_out) if h_out is not None else "--%"
+        if w_spd is not None:
+            bottom += " {:.0f}km/h".format(w_spd)
+            if w_spd > 0 and w_dir is not None:
+                bottom += " " + _get_compass_point(w_dir)
+        self.oled.text(_center(bottom), 0, 52, 1)
+
+    def _get_card_content(self, card, data):
+        """Return (card_title, [line1, line2, line3, line4]) for a text card"""
+        if card == "exterior":
+            # AMBIENTE EXTERIOR
             t_out = data.get("temp_out_c")
             h_out = data.get("humidity_out")
             dp = data.get("dewpoint_c")
@@ -373,8 +440,8 @@ class WeatherDisplay:
                 "Tend: " + trend[:10]
             ]
 
-        elif card_idx == 1:
-            # Card 1: VIENTO Y RAFAGAS (LOOP 2)
+        elif card == "viento":
+            # VIENTO Y RAFAGAS (LOOP 2)
             w_spd = data.get("wind_speed_kmh") or 0.0
             w_dir = data.get("wind_direction_deg")
             w_gst = data.get("windgustkmh_10m") or w_spd
@@ -391,8 +458,8 @@ class WeatherDisplay:
                 "Sost: " + s_str[:10]
             ]
 
-        elif card_idx == 2:
-            # Card 2: PRECIPITACION & INDICES
+        elif card == "lluvia":
+            # PRECIPITACION
             r_rate = data.get("rain_rate_mm_per_hr") or 0.0
             r_day = data.get("rain_day_mm") or 0.0
             r_month = data.get("rain_month_mm") or 0.0
@@ -405,8 +472,8 @@ class WeatherDisplay:
                 "Ano:  {:.1f} mm".format(r_year)
             ]
 
-        elif card_idx == 3:
-            # Card 3: SOL, ASTRONOMIA & PRONOSTICO DAVIS
+        elif card == "sol":
+            # SOL & PRONOSTICO DAVIS
             sr = data.get("sunrise") or "--:--"
             ss = data.get("sunset") or "--:--"
             f_desc = _format_forecast(data.get("forecast_icons"))
@@ -418,35 +485,23 @@ class WeatherDisplay:
                 "  " + f_desc[:14]
             ]
 
-        elif card_idx == 4:
-            # Card 4: IDENTIFICACION Y CREDENCIALES DE ESTACION
-            return "ESTACION", [
-                _center("Davis VP2"),
-                _center("\"El Gancho\""),
-                _center("ID: " + str(self.wu_station_id)),
-                _center("by J. Estay")
-            ]
-
-        elif card_idx == 5:
-            # Card 5: INTERIOR Y DIAGNOSTICO DE SISTEMA
-            t_in = data.get("temp_in_c")
-            h_in = data.get("humidity_in")
+        elif card == "sistema":
+            # DIAGNOSTICO: firmware, recepcion del transmisor, baterias, ultimo arranque
             c_volt = data.get("console_battery_v")
-            iss_ok = "OK" if data.get("tx_battery_status") != 1 else "BAJA"
-
-            t_in_str = "{:.1f}C".format(t_in) if t_in is not None else "--.-C"
-            h_in_str = "{}%".format(h_in) if h_in is not None else "--%"
+            tx_batt = "OK" if data.get("tx_battery_status") != 1 else "BAJA"
+            rec = "{:.0f}%".format(self.iss_recept) if self.iss_recept is not None else "--"
             c_str = "{:.2f}V".format(c_volt) if c_volt is not None else "--V"
+            reset = _RESET_SHORT.get(self.reset_cause, self.reset_cause) or "--"
 
             return "SISTEMA", [
-                "Int:  " + t_in_str + " " + h_in_str,
+                "FW: v" + str(self.fw_version or "--"),
+                "ISS " + rec + " Tx " + tx_batt,
                 "Consola: " + c_str,
-                "Transm:  " + iss_ok,
-                "IP: " + str(self.ip_addr)[:12]
+                "Inicio " + reset[:8]
             ]
 
         else:
-            # Card 6: ESTADO DE SUBIDAS CLOUD (WU & GOOGLE DRIVE CON FECHA-HORA)
+            # ESTADO DE SUBIDAS CLOUD (WU & GOOGLE DRIVE CON FECHA-HORA)
             return "SUBIDAS", [
                 "WU:     " + self.wu_status,
                 "  " + self.wu_datetime,
@@ -461,14 +516,8 @@ class WeatherDisplay:
         now_str (ESP32 local clock). It turns into an inverted alert when the console has not
         answered for STALE_DATA_SECONDS ([SIN DATOS 5m]) or the last Sheets upload failed.
         Between NIGHT_START_HOUR and NIGHT_END_HOUR the screen is off unless there is an alert.
-        Cycles across 7 cards:
-          0: EXTERIOR
-          1: VIENTO
-          2: LLUVIA
-          3: SOL/PRON (Amanecer, Atardecer, Pronostico)
-          4: ESTACION ("El Gancho" by J. Estay)
-          5: SISTEMA
-          6: SUBIDAS (WU & Google Drive status + timestamps)
+        Cards follow _ROTATION: the big temperature (AHORA) alternates with EXTERIOR, VIENTO,
+        LLUVIA (only while it rains), SOL/PRON, SISTEMA and SUBIDAS.
         """
         if not self.has_oled or not self.oled:
             return
@@ -482,11 +531,11 @@ class WeatherDisplay:
                     timestamp_str=data.get("timestamp")
                 )
 
-            # Get content for current card
-            card_title, lines = self._get_card_content(self.card_index, data)
-
-            # Advance card index for next cycle (0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 0)
-            self.card_index = (self.card_index + 1) % 7
+            card = self._next_card(data)
+            if card == "ahora":
+                card_title, lines = "AHORA", None
+            else:
+                card_title, lines = self._get_card_content(card, data)
 
             left, right, alert, night = self._status_header(card_title, data, now_str)
             if night and not alert:
@@ -494,6 +543,17 @@ class WeatherDisplay:
                 self.last_card_lines = None  # gentle entrance when the screen comes back on
                 return
             self._set_power(True, CONTRAST_NIGHT if night else CONTRAST_DAY)
+
+            if lines is None:
+                # Big-number card: drawn at once; the next text card slides in gently
+                self.oled.fill(0)
+                self._draw_header(left, right, alert)
+                self._draw_now_card(data)
+                self.oled.show()
+                self.last_card_lines = None
+                self.last_card_title = card_title
+                self.check_led_timer()
+                return
 
             if animate and self.last_card_lines is not None:
                 # Vertical slide-up animation: old card rolls up & out, new card rolls up & in

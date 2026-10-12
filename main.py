@@ -323,6 +323,7 @@ def main(max_cycles=None):
     reset_cause = read_reset_cause()
     if reset_cause:
         log("Causa del arranque: {}".format(reset_cause))
+    display.set_system_info(fw=installed_fw, reset=reset_cause)
     if not clock_is_valid():
         log("[RELOJ] Sin hora valida (NTP sin internet): no se registrara nada hasta sincronizar")
 
@@ -480,6 +481,7 @@ def main(max_cycles=None):
                     if samples is not None:
                         record_data["wind_samples"] = samples
                         record_data["iss_recept"] = round(min(100.0, samples / 225.0 * 100.0), 1)
+                    display.set_iss_recept(record_data.get("iss_recept"))
 
                     # Local CSV is always appended immediately (never lost)
                     log_reading_csv(CSV_FILEPATH, record_data, uploaded=False)
