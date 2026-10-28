@@ -1,12 +1,12 @@
 {
-  "version": "1.0.22",
-  "date": "2026-10-12",
-  "description": "Menos memoria: sin CSV local, lectura de la consola sin recargar modulos",
+  "version": "1.0.23",
+  "date": "2026-10-28",
+  "description": "Reinicio si pasa 1 hora sin subir a la planilla; motivo del fallo en el reporte",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "3269228ae5eeb0b90b5b03ca16f052a424d4e9b36ed7102c49b6656c48f17747"
+      "sha256": "f1ca49dad95ddeeb7721b154665abf9308221ceb5ede2854bc0df2cc6ba04a0a"
     },
     {
       "remote": "src/display.mpy",
@@ -26,7 +26,7 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "babaa33a9a443f6c82e9d3851229848c9c5a81c854ce7e0916ea1a1642b27c96"
+      "sha256": "99a352248166626145b192e9f7d340ba23ccd438e94063b4cd89300054924788"
     },
     {
       "remote": "src/history_recovery.mpy",
@@ -46,7 +46,7 @@
     {
       "remote": "src/health.mpy",
       "local": "src/health.mpy",
-      "sha256": "c226b706ed52b2ae0f2f5102c356750f0085dedaa3ee10730f7dbfa089e9a472"
+      "sha256": "22d977253df925a51bb952bd45929bb5e366d6ec1689726aeeee28284e894381"
     },
     {
       "remote": "src/weather_underground.mpy",
