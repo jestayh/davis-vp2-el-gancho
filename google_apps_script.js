@@ -46,13 +46,16 @@ var STATUS_COLUMNS = [
   ["Recuperaciones consola", "recoveries"],
   ["Errores pantalla", "err_display"],
   ["Memoria sistema mín (KB)", "sys_min_kb"],   // WiFi y conexiones: bajo ~8 KB ya no puede conectarse
+  ["Último error Sheets", "sheets_error"],
   ["Red WiFi", "ssid"],
   ["Ruta OTA", "ota_route"],
   ["Registros ayer", "records_yesterday"]     // calculado aquí: filas del día anterior (lo normal, 144)
 ];
 // Celdas del reporte que se marcan en rojo: [campo, función que decide si el valor es malo]
 var STATUS_LIMITS = [
-  ["reset_cause", function (v) { return v === "Watchdog" || v === "Memoria agotada"; }],
+  ["reset_cause", function (v) {
+    return v === "Watchdog" || v === "Memoria agotada" || v === "Sin subidas a la planilla";
+  }],
   ["mem_min_kb", function (v) { return v !== "" && v < 30; }],
   ["rssi", function (v) { return v !== "" && v < -80; }],
   ["err_console", function (v) { return v > 50; }],

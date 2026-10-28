@@ -63,6 +63,14 @@ def test_stale_py_next_to_mpy_is_removed(tmp_path):
     assert main.drop_stale_sources(str(tmp_path / "missing")) == []
 
 
+def test_restart_after_an_hour_without_reaching_the_sheet():
+    import main
+    t0 = 1791800000
+    assert not main.sheets_stalled(t0 + 3599, t0, True)
+    assert main.sheets_stalled(t0 + 3600, t0, True)
+    assert not main.sheets_stalled(t0 + 7200, t0, False)      # no valid clock: nothing is uploaded on purpose
+
+
 def test_reason_of_a_deliberate_restart_is_reported_once(tmp_path):
     import main
     marker = tmp_path / "reset_reason.txt"

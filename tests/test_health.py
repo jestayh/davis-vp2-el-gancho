@@ -41,12 +41,44 @@ def test_counters_and_lowest_ram_start_over_after_each_report(monkeypatch):
     r = h.report()                                    # samples current RAM: 70000
     assert r == {"fw": "1.0.15", "uptime_h": 0.0, "reset_cause": "Watchdog", "mem_free_kb": 68.4,
                  "mem_min_kb": 50.0, "rssi": -67, "err_console": 2, "err_sheets": 1, "err_wu": 0,
-                 "recoveries": 1, "err_display": 0, "sys_min_kb": 22.5, "ssid": "2.4G_Casa",
+                 "recoveries": 1, "err_display": 0, "sys_min_kb": 22.5, "sheets_error": None, "ssid": "2.4G_Casa",
                  "ota_route": "Proxy HTTP"}
     h.sent()
     h.tick()                                          # RAM 60000
     r = h.report()
     assert r["err_console"] == 0 and r["recoveries"] == 0 and r["mem_min_kb"] == 58.6
+
+
+def test_failed_upload_records_why_and_closes_the_socket(monkeypatch):
+    closed = []
+
+    class FakeSocket:
+        def settimeout(self, t):
+            pass
+
+        def connect(self, addr):
+            pass
+
+        def write(self, b):
+            raise OSError(116)                                # ETIMEDOUT while sending
+
+        def close(self):
+            closed.append(1)
+
+    class FakeSocketModule:
+        @staticmethod
+        def getaddrinfo(host, port):
+            return [(2, 1, 0, "", ("1.2.3.4", port))]
+
+        socket = FakeSocket
+
+    monkeypatch.setattr(gs, "IS_ESP32", True)
+    monkeypatch.setitem(sys.modules, "socket", FakeSocketModule)
+    import json
+    monkeypatch.setitem(sys.modules, "ujson", json)
+    gs.LAST_ERROR = None
+    assert gs._post_json("http://proxy.example/", {"a": 1}) is False
+    assert gs.LAST_ERROR.startswith("OSError") and closed
 
 
 def test_ota_route_read_from_the_updater_file(tmp_path):

@@ -95,6 +95,9 @@ BOOT_BUTTON_PIN = 0
 # memory the ESP32 cannot open sockets (OSError -203). Restart after LOW_SYS_MEM_CYCLES cycles.
 LOW_SYS_MEM_BYTES = 8 * 1024
 LOW_SYS_MEM_CYCLES = 6
+# No record reached the sheet for this long (while the clock is valid): restart. On 2026-10-28 the
+# station kept sending to WU for 12 h while every Sheets upload failed before reaching the Worker.
+SHEETS_STALL_SECONDS = 3600
 RESET_REASON_FILE = "data/reset_reason.txt"
 
 IS_ESP32 = sys.platform == "esp32"
@@ -308,6 +311,12 @@ def take_reset_reason(path=RESET_REASON_FILE):
         return None
 
 
+def sheets_stalled(now, last_ok, clock_valid):
+    """True when no record reached the sheet for SHEETS_STALL_SECONDS (only with a valid clock:
+    without one nothing is uploaded on purpose)"""
+    return clock_valid and now - last_ok >= SHEETS_STALL_SECONDS
+
+
 def system_mem_free():
     """Free system (ESP-IDF) memory in bytes, where WiFi and sockets live; None on a PC"""
     if not IS_ESP32:
@@ -484,6 +493,7 @@ def main(max_cycles=None):
     wu_fail_slot = 0          # failed WU uploads since the last Sheets record (sent with it)
     display_errors_reported = 0
     low_mem_cycles = 0
+    last_sheets_ok = time.time()      # time of the last record that reached the sheet
     setup_boot_button()
 
     try:
@@ -504,6 +514,7 @@ def main(max_cycles=None):
                     if not clock_was_valid:
                         next_clock_check = 0
                         check_gap = True
+                        last_sheets_ok = time.time()
 
             cycle_start = time.time()
             current_time = time.time()
@@ -643,6 +654,7 @@ def main(max_cycles=None):
                         display.update_cloud_status(gdrive_ok=uploaded_gdrive, timestamp_str=record_data.get("timestamp"))
 
                         if uploaded_gdrive:
+                            last_sheets_ok = time.time()
                             if not ota_confirmed:
                                 confirm_ota_install()
                                 ota_confirmed = True
@@ -674,11 +686,13 @@ def main(max_cycles=None):
 
                                 # Health report to the "Estado" tab: right after boot, then daily
                                 health.err_display = display.errors - display_errors_reported
+                                health.sheets_error = gsheets.LAST_ERROR
                                 if health.due() and upload_status(GOOGLE_APPS_SCRIPT_URL, health.report(),
                                                                   format_timestamp_local()):
                                     log("[ESTADO] Reporte diario enviado")
                                     health.sent()
                                     display_errors_reported = display.errors
+                                    gsheets.LAST_ERROR = None
 
                             # The Sheets proxy announces the latest published firmware: update without waiting a day
                             fw_hint = gsheets.FW_HINT
@@ -738,6 +752,10 @@ def main(max_cycles=None):
                     restart_because("Memoria agotada")
             else:
                 low_mem_cycles = 0
+            if IS_ESP32 and GOOGLE_APPS_SCRIPT_URL and sheets_stalled(time.time(), last_sheets_ok, clock_is_valid()):
+                # Whatever blocks the uploads (memory, network state), a restart clears it and the
+                # console archive fills the gap afterwards
+                restart_because("Sin subidas a la planilla")
 
             # Update status LED timer (ensures 20s solid light turns off accurately)
             display.check_led_timer()

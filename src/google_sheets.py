@@ -21,6 +21,8 @@ IS_ESP32 = sys.platform == "esp32"
 
 # Latest firmware version announced by the Cloudflare proxy (X-Davis-Fw header) on the last upload
 FW_HINT = None
+# Why the last failed upload failed (sent in the daily health report), or None
+LAST_ERROR = None
 
 
 def log(msg):
@@ -146,6 +148,7 @@ def _post_json(script_url, payload, timeout=12):
     """POST payload as JSON to the Apps Script / proxy. Returns True on success."""
     if not script_url or not (script_url.startswith("https://") or script_url.startswith("http://")):
         return False
+    s = ss = None
     try:
         if IS_ESP32:
             # High-efficiency single-socket TLS implementation for MicroPython
@@ -230,6 +233,7 @@ def _post_json(script_url, payload, timeout=12):
                 except Exception:
                     pass
             s.close()
+            ss = s = None
             gc.collect()
 
             status_str = raw_resp.decode("utf-8", "ignore") if raw_resp else ""
@@ -237,7 +241,7 @@ def _post_json(script_url, payload, timeout=12):
                 log("Fila enviada exitosamente a Google Sheets.")
                 return True
             else:
-                log("Google Sheets respondio: {}".format(status_str[:40].strip()))
+                _fail("respuesta " + status_str[:40].strip())
                 return False
 
         else:
@@ -279,5 +283,19 @@ def _post_json(script_url, payload, timeout=12):
         if "302" in err or "redirect" in err:
             log("Fila enviada a Google Sheets (302 Redirect).")
             return True
-        log("Error enviando a Google Sheets: {}".format(e))
+        _fail("{}: {}".format(type(e).__name__, e))
         return False
+    finally:
+        # A failure after connect() must not leave the socket open holding network memory
+        for sock in (ss, s):
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+
+def _fail(reason):
+    global LAST_ERROR
+    LAST_ERROR = reason[:60]
+    log("Error enviando a Google Sheets: {}".format(reason))

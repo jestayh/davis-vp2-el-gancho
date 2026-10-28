@@ -81,6 +81,7 @@ class Health:
         self.err_wu = 0
         self.recoveries = 0
         self.err_display = 0
+        self.sheets_error = None     # last reason a Sheets upload failed (set by the main loop)
         self.mem_min = None
         self.sys_min = None
 
@@ -115,6 +116,7 @@ class Health:
             "recoveries": self.recoveries,
             "err_display": self.err_display,
             "sys_min_kb": _kb(self.sys_min),
+            "sheets_error": self.sheets_error,
             "ssid": _ssid(),
             "ota_route": _ota_route(),
         }
