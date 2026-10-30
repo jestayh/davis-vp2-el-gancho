@@ -1,0 +1,4 @@
+# Sin "#!include:.gitignore": secret.yaml debe llegar al despliegue aunque no vaya al repositorio
+.gcloudignore
+__pycache__/
+test_*.py

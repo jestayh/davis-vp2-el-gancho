@@ -204,16 +204,23 @@ def _sha256_file(path):
     return binascii.hexlify(h.digest()).decode()
 
 
-def _build_sources(repo_user, repo_name, branch, proxy_host):
+def _build_sources(repo_user, repo_name, branch, proxy_host, relay_host=None):
     """
     Ordered list of (label, host, path_prefix, use_ssl) download routes. On the station's ESP32 the
     TLS routes fail for lack of RAM (GitHub after a long wait, the proxy HTTPS after ~2 min), while
     the proxy over plain HTTP works, so it goes first (files are still verified against their SHA-256).
+    The backup route outside Cloudflare (relay_host, plain HTTP) comes right after it.
     """
     github = ("GitHub", "raw.githubusercontent.com", "/" + repo_user + "/" + repo_name + "/" + branch, True)
-    if not proxy_host:
-        return [github]
-    return [("Proxy HTTP", proxy_host, "", False), github, ("Proxy HTTPS", proxy_host, "", True)]
+    sources = []
+    if proxy_host:
+        sources.append(("Proxy HTTP", proxy_host, "", False))
+    if relay_host:
+        sources.append(("Respaldo HTTP", relay_host, "", False))
+    sources.append(github)
+    if proxy_host:
+        sources.append(("Proxy HTTPS", proxy_host, "", True))
+    return sources
 
 
 def _first_route(sources):
@@ -271,13 +278,15 @@ def _fetch(sources, start_idx, rel_path, target_path, expected_sha=None):
     return False, start_idx, last_err
 
 
-def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=None, proxy_host=None):
+def check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main", display=None, proxy_host=None,
+                     relay_host=None):
     """
     Check GitHub for newer firmware version.
     If available, downloads all updated .mpy files atomically and reboots.
     proxy_host: Cloudflare Worker hostname used as fallback route (None disables it).
+    relay_host: backup route outside Cloudflare (appengine/main.py), None disables it.
     """
-    sources = _build_sources(repo_user, repo_name, branch, proxy_host)
+    sources = _build_sources(repo_user, repo_name, branch, proxy_host, relay_host)
 
     local_ver = get_local_version()
     print("[OTA] Comprobando actualizaciones en GitHub (version local: v{})...".format(local_ver))

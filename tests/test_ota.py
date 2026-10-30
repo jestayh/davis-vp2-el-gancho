@@ -23,6 +23,13 @@ def test_proxy_http_goes_first():
     assert routes(None) == ["GitHub"]
 
 
+def test_backup_route_outside_cloudflare_comes_right_after_the_proxy():
+    labels = [s[0] for s in ota._build_sources("u", "r", "main", "proxy.example", "relay.example")]
+    assert labels == ["Proxy HTTP", "Respaldo HTTP", "GitHub", "Proxy HTTPS"]
+    assert ota._build_sources("u", "r", "main", "proxy.example", "relay.example")[1] == \
+        ("Respaldo HTTP", "relay.example", "", False)
+
+
 def test_route_that_worked_is_remembered(device, monkeypatch):
     calls = []
 

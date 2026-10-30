@@ -1,0 +1,13 @@
+# Google App Engine (estandar, Python 3.12). Desplegar desde esta carpeta con:  gcloud app deploy
+# Sin "handlers" ni "secure: always", App Engine atiende tambien por HTTP simple (lo que necesita el ESP32).
+runtime: python312
+entrypoint: gunicorn -b :$PORT -w 1 --threads 4 --timeout 60 main:app
+instance_class: F1
+automatic_scaling:
+  max_instances: 1          # nunca mas de una instancia: se mantiene dentro de la cuota gratuita
+
+# secret.yaml (NO se sube al repositorio, esta en .gitignore) contiene:
+#   env_variables:
+#     APPS_SCRIPT_URL: "https://script.google.com/macros/s/.../exec"
+includes:
+  - secret.yaml

@@ -81,6 +81,27 @@ def test_failed_upload_records_why_and_closes_the_socket(monkeypatch):
     assert gs.LAST_ERROR.startswith("OSError") and closed
 
 
+def test_backup_route_when_the_proxy_cannot_be_reached(monkeypatch):
+    tried = []
+    up = {"http://proxy.example/": False, "http://relay.example/": True}
+    monkeypatch.setattr(gs, "RELAY_URL", "http://relay.example/")
+    monkeypatch.setattr(gs, "USING_RELAY", False)
+    monkeypatch.setattr(gs, "_post_json", lambda url, p, t=12: tried.append(url) or up[url])
+    assert gs.upload_to_google_sheets("http://proxy.example/", {"timestamp": "2026-10-30 16:00:00"})
+    assert tried == ["http://proxy.example/", "http://relay.example/"] and gs.USING_RELAY
+    # While on the backup, the unreachable proxy costs no timeout per row
+    tried.clear()
+    assert gs.upload_status("http://proxy.example/", {}, "2026-10-30 16:10:05")
+    assert tried == ["http://relay.example/"]
+    # Back to the proxy once the backup fails and the proxy answers
+    up.update({"http://proxy.example/": True, "http://relay.example/": False})
+    tried.clear()
+    assert gs.upload_to_google_sheets("http://proxy.example/", {})
+    assert tried == ["http://relay.example/", "http://proxy.example/"] and not gs.USING_RELAY
+    up["http://proxy.example/"] = False
+    assert not gs.upload_to_google_sheets("http://proxy.example/", {})
+
+
 def test_ota_route_read_from_the_updater_file(tmp_path):
     f = tmp_path / "ota_route.txt"
     f.write_text("Proxy HTTP\n")

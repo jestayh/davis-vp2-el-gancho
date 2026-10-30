@@ -91,4 +91,7 @@ OTA_CHECK_INTERVAL_SECONDS = 86400
 # Fallback route when GitHub cannot be reached directly: Cloudflare Worker from
 # cloudflare/ota_worker.js (tried over HTTPS, then HTTP). "" disables the fallback.
 OTA_PROXY_HOST = "davis-ota-proxy.your-subdomain.workers.dev"
+# Optional backup route outside Cloudflare for both uploads and OTA (appengine/main.py on
+# Google App Engine, plain HTTP). Overrides the default in src/google_sheets.py; "" disables it.
+# RELAY_HOST = "your-project.appspot.com"
 

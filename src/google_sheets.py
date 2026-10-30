@@ -24,6 +24,16 @@ FW_HINT = None
 # Why the last failed upload failed (sent in the daily health report), or None
 LAST_ERROR = None
 
+# Backup route outside Cloudflare (appengine/main.py, plain HTTP). From 2026-10-28 the house network
+# reached *.workers.dev only now and then; config.py can't change by OTA, so the host lives here.
+try:
+    from config import RELAY_HOST
+except ImportError:
+    RELAY_HOST = "davis-el-gancho.rj.r.appspot.com"
+RELAY_URL = "http://" + RELAY_HOST + "/" if RELAY_HOST else ""
+# The route that worked last goes first, so an outage of the other one costs no timeout per row
+USING_RELAY = False
+
 
 def log(msg):
     print("[GoogleDrive] {}".format(msg))
@@ -89,7 +99,7 @@ def upload_to_google_sheets(script_url, data, timeout=12):
     for key in ("reset_cause", "destino", "wu_err"):
         if data.get(key):
             payload[key] = data[key]
-    return _post_json(script_url, payload, timeout)
+    return _post_with_backup(script_url, payload, timeout)
 
 
 def upload_status(script_url, status, timestamp, timeout=12):
@@ -102,7 +112,22 @@ def upload_status(script_url, status, timestamp, timeout=12):
     payload = dict(status)
     payload["destino"] = "estado"
     payload["timestamp"] = "ESTADO " + timestamp
-    return _post_json(script_url, payload, timeout)
+    return _post_with_backup(script_url, payload, timeout)
+
+
+def _post_with_backup(script_url, payload, timeout=12):
+    """POST through the main proxy or, if it fails, the backup route (last working one first)"""
+    global USING_RELAY
+    routes = [script_url]
+    if RELAY_URL and script_url and script_url != RELAY_URL:
+        routes = [RELAY_URL, script_url] if USING_RELAY else [script_url, RELAY_URL]
+    for url in routes:
+        if _post_json(url, payload, timeout):
+            if USING_RELAY != (url == RELAY_URL):
+                USING_RELAY = url == RELAY_URL
+                log("Ruta de subida: {}".format("respaldo" if USING_RELAY else "principal"))
+            return True
+    return False
 
 
 # MicroPython's json.dump only writes to real streams: io.IOBase subclasses qualify (they get

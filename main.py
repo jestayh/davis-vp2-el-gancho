@@ -274,7 +274,7 @@ def run_ota_check():
     try:
         import src.ota_updater as ota
         ota.check_and_update(repo_user="jestayh", repo_name="davis-vp2-el-gancho", branch="main",
-                             display=display, proxy_host=OTA_PROXY_HOST)
+                             display=display, proxy_host=OTA_PROXY_HOST, relay_host=gsheets.RELAY_HOST)
     except Exception as ota_err:
         log("[OTA] Error comprobando actualizaciones: {}".format(ota_err))
     finally:

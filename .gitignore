@@ -33,6 +33,7 @@ config.py
 .env
 .env.local
 secrets.json
+appengine/secret.yaml
 
 # Binaries & Driver / Firmware installers
 *.bin
