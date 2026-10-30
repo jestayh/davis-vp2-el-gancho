@@ -1,12 +1,12 @@
 {
-  "version": "1.0.23",
-  "date": "2026-10-28",
-  "description": "Reinicio si pasa 1 hora sin subir a la planilla; motivo del fallo en el reporte",
+  "version": "1.0.24",
+  "date": "2026-10-30",
+  "description": "Ruta de respaldo por Google App Engine si Cloudflare no responde (subidas y OTA)",
   "files": [
     {
       "remote": "app.mpy",
       "local": "app.mpy",
-      "sha256": "f1ca49dad95ddeeb7721b154665abf9308221ceb5ede2854bc0df2cc6ba04a0a"
+      "sha256": "c033d91ba27d1c61bbac078e748d5a07f1b8b02663e487a0bcda9ec2323c3431"
     },
     {
       "remote": "src/display.mpy",
@@ -26,7 +26,7 @@
     {
       "remote": "src/google_sheets.mpy",
       "local": "src/google_sheets.mpy",
-      "sha256": "99a352248166626145b192e9f7d340ba23ccd438e94063b4cd89300054924788"
+      "sha256": "a2054a10febb6f340d35132d96d7ffe727fbddcd964c1ab5ba5ff584eecd476c"
     },
     {
       "remote": "src/history_recovery.mpy",
@@ -36,7 +36,7 @@
     {
       "remote": "src/ota_updater.mpy",
       "local": "src/ota_updater.mpy",
-      "sha256": "66503efd6b4cc365ac306a1fe6c54eb8b89eae5fc44c0d2a9d2a706a06344c77"
+      "sha256": "4711a15bf6fc41e88e918c601e29b735f0dd7fec3110d32e4bafbe17dfa7edac"
     },
     {
       "remote": "src/watchdog.mpy",
